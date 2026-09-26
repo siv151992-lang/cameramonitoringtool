@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# Camera monitoring tool - configuration
+#
+# Copy this file to config.yaml and edit it:
+#     cp config.example.yaml config.yaml
+#
+# Any value can read an environment variable with ${NAME}, so passwords never
+# have to be stored in this file.
+# ---------------------------------------------------------------------------
+
+site:
+  # Appears in the dashboard heading and in alert subject lines.
+  name: "Estancia Office"
+
+inventory:
+  # The camera list. Created for you by 'camtool.py discover'.
+  file: cameras.csv
+
+discovery:
+  # The LAN ranges your cameras live on. Add one line per VLAN / floor.
+  # Accepts 192.168.1.0/24, a single 192.168.1.50, or 192.168.1.10-192.168.1.99
+  subnets:
+    - 192.168.1.0/24
+    # - 192.168.2.0/24
+    # - 10.20.30.0/24
+
+  # Ports that say "this is probably a camera".
+  # 80/443/8080 web, 554 RTSP, 8000 Hikvision, 37777 Dahua, 8899 ONVIF/OEM.
+  ports: [80, 554, 8000, 37777, 443, 8080, 8899]
+
+  # Also listen for cameras that announce themselves over ONVIF. Finds cameras
+  # on addresses you did not think to scan.
+  onvif_probe: true
+
+  timeout: 1.0       # seconds to wait per port
+  workers: 256       # parallel connections during a sweep
+
+credentials:
+  # Used for the SD card check. Read-only "operator" accounts are enough and
+  # are safer than using the admin account.
+  default:
+    username: "admin"
+    password: "${CAMERA_PASSWORD}"      # export CAMERA_PASSWORD=... before running
+
+  # Optional: different passwords for different ranges.
+  overrides: []
+  #   - subnet: 192.168.5.0/24
+  #     username: "operator"
+  #     password: "${CAMERA_PASSWORD_FLOOR5}"
+
+checks:
+  workers: 100               # cameras checked in parallel; 100 suits ~1000 cameras
+  tcp_timeout: 2.0           # seconds to decide a camera is not answering
+  http_timeout: 6.0          # seconds for the SD card query
+  interval_seconds: 300      # how often 'monitor' runs a cycle (5 minutes)
+
+  # A camera must fail this many checks in a row before it is called offline.
+  # Stops one dropped packet from raising an alert.
+  offline_after_failures: 2
+
+  storage_check: true        # check SD card health at all
+  storage_every_n_cycles: 3  # SD check is slower, so run it every 3rd cycle
+  history_retention_days: 30 # how long to keep history for uptime figures
+
+database:
+  file: data/monitor.db
+
+alerts:
+  enabled: true
+
+  # How long before the same ongoing problem is reported again.
+  min_repeat_hours: 6
+
+  # Print alerts to the terminal / service log.
+  console: true
+
+  email:
+    enabled: false
+    smtp_host: "smtp.zoho.com"
+    smtp_port: 587
+    use_tls: true
+    username: "monitoring@example.com"
+    password: "${SMTP_PASSWORD}"
+    from_address: "monitoring@example.com"
+    to_addresses:
+      - "facilities@example.com"
+
+  webhook:
+    # Works with Zoho Cliq, Slack, Teams and most chat tools that accept a
+    # JSON POST. Check which field name your tool expects.
+    enabled: false
+    url: "${WEBHOOK_URL}"
+    message_field: "text"
+
+web:
+  host: "0.0.0.0"       # 0.0.0.0 = reachable from other machines on the LAN
+  port: 8080
+  refresh_seconds: 30
+
+  # Optional browser login. Leave username empty to disable.
+  username: ""
+  password: ""

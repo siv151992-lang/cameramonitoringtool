@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__SITE_NAME__ - Camera Status</title>
+<style>
+  /* Status palette is fixed and never themed; surfaces and ink swap by mode. */
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --gridline: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --good: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+    --hover: rgba(11, 11, 11, 0.035);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --gridline: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --hover: rgba(255, 255, 255, 0.05);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --gridline: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.10);
+    --hover: rgba(255, 255, 255, 0.05);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 24px 20px 48px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .meta { color: var(--text-muted); font-size: 13px; }
+  .spacer { flex: 1; }
+  .ghost {
+    background: var(--surface-1); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+    text-decoration: none; display: inline-block; line-height: 1.5;
+  }
+  .ghost:hover { background: var(--hover); color: var(--text-primary); }
+
+  /* --- stat tiles --------------------------------------------------- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label { color: var(--text-secondary); font-size: 13px; }
+  .tile .value { font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; }
+  .tile .sub { color: var(--text-muted); font-size: 12px; }
+  .tile.accent-good { border-left: 3px solid var(--good); }
+  .tile.accent-critical { border-left: 3px solid var(--critical); }
+  .tile.accent-warning { border-left: 3px solid var(--warning); }
+
+  /* --- filters ------------------------------------------------------ */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  input[type="search"] {
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font: inherit; min-width: 240px;
+  }
+  .chip {
+    background: var(--surface-1); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 13px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .chip[aria-pressed="true"] {
+    background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary);
+  }
+
+  /* --- table -------------------------------------------------------- */
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--gridline); }
+  th {
+    color: var(--text-secondary); font-weight: 600; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  th:hover { color: var(--text-primary); }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.ip { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  td.sd { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dim { color: var(--text-muted); }
+
+  /* Status always pairs a shape with a word - never colour alone. */
+  .pill { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.good { background: var(--good); }
+  .dot.critical { background: var(--critical); }
+  .dot.warning { background: var(--warning); }
+  .dot.serious { background: var(--serious); }
+  .dot.unknown { background: var(--text-muted); }
+  .pill.critical { color: var(--critical); font-weight: 600; }
+
+  .events li { margin-bottom: 6px; list-style: none; }
+  .events ul { margin: 0; padding: 14px; }
+  .events .ts { color: var(--text-muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 24px 0 10px; }
+  .empty { padding: 28px; text-align: center; color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>__SITE_NAME__ &mdash; Camera Status</h1>
+    <span class="meta" id="updated">loading&hellip;</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="theme-toggle" type="button">Dark / light</button>
+    <a class="ghost" href="export.csv">Download CSV</a>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="filters">
+    <input type="search" id="search" placeholder="Search IP, name or location&hellip;" autocomplete="off">
+    <button class="chip" data-filter="all" aria-pressed="true" type="button">All</button>
+    <button class="chip" data-filter="online" aria-pressed="false" type="button">Online</button>
+    <button class="chip" data-filter="offline" aria-pressed="false" type="button">Offline</button>
+    <button class="chip" data-filter="sd" aria-pressed="false" type="button">SD card problem</button>
+    <span class="meta" id="shown"></span>
+  </div>
+
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="status">Status</th>
+          <th data-sort="ip">IP address</th>
+          <th data-sort="name">Name</th>
+          <th data-sort="location">Location</th>
+          <th data-sort="brand">Brand</th>
+          <th data-sort="sd">SD card</th>
+          <th data-sort="uptime" class="num">Uptime 24h</th>
+          <th data-sort="latency" class="num">Response</th>
+          <th data-sort="last_seen">Last seen</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>No cameras match this filter.</div>
+  </div>
+
+  <h2>Recent events</h2>
+  <div class="panel events"><ul id="events"><li class="dim">No events yet.</li></ul></div>
+</div>
+
+<script>
+const REFRESH_SECONDS = __REFRESH_SECONDS__;
+let cameras = [];
+let filter = "all";
+let sortKey = "ip";
+let sortDir = 1;
+
+const fmtTime = (iso) => {
+  if (!iso) return "never";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString(undefined,
+    { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+};
+
+const ipKey = (ip) => ip.split(".").reduce((acc, part) => acc * 256 + (parseInt(part, 10) || 0), 0);
+
+// Status is rendered as dot + word so it never depends on colour alone.
+function statusCell(cam) {
+  const tone = cam.online ? "good" : "critical";
+  const word = cam.online ? "Online" : "Offline";
+  return `<span class="pill ${cam.online ? "" : "critical"}"><span class="dot ${tone}"></span>${word}</span>`;
+}
+
+function sdCell(cam) {
+  const map = {
+    ok: ["good", "Healthy"],
+    failed: ["critical", "Failed"],
+    missing: ["serious", "Not present"],
+    unknown: ["unknown", "Unknown"],
+  };
+  const [tone, word] = map[cam.storage_state] || map.unknown;
+  const detail = cam.storage_message ? ` <span class="dim">${escapeHtml(cam.storage_message)}</span>` : "";
+  const strong = (cam.storage_state === "failed") ? " critical" : "";
+  return `<span class="pill${strong}"><span class="dot ${tone}"></span>${word}</span>${detail}`;
+}
+
+function escapeHtml(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (ch) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+function renderTiles(summary) {
+  const pct = summary.total ? Math.round((summary.online / summary.total) * 100) : 0;
+  const tiles = [
+    { label: "Cameras", value: summary.total, sub: "in the inventory", accent: "" },
+    { label: "Online", value: summary.online, sub: pct + "% of all cameras", accent: "accent-good" },
+    { label: "Offline", value: summary.offline, sub: "not responding", accent: summary.offline ? "accent-critical" : "" },
+    { label: "SD card problems", value: summary.sd_failed, sub: summary.sd_unknown + " unknown", accent: summary.sd_failed ? "accent-critical" : "" },
+  ];
+  document.getElementById("tiles").innerHTML = tiles.map((t) => `
+    <div class="tile ${t.accent}">
+      <div class="label">${t.label}</div>
+      <div class="value">${t.value.toLocaleString()}</div>
+      <div class="sub">${escapeHtml(t.sub)}</div>
+    </div>`).join("");
+}
+
+function sortValue(cam, key) {
+  switch (key) {
+    case "status": return cam.online ? 1 : 0;
+    case "ip": return ipKey(cam.ip);
+    case "sd": return ["failed", "missing", "unknown", "ok"].indexOf(cam.storage_state);
+    case "uptime": return cam.uptime_24h ?? -1;
+    case "latency": return cam.latency_ms ?? Number.MAX_SAFE_INTEGER;
+    case "last_seen": return cam.last_online_at ? Date.parse(cam.last_online_at) : 0;
+    default: return String(cam[key] ?? "").toLowerCase();
+  }
+}
+
+function renderRows() {
+  const query = document.getElementById("search").value.trim().toLowerCase();
+  let list = cameras.filter((cam) => {
+    if (filter === "online" && !cam.online) return false;
+    if (filter === "offline" && cam.online) return false;
+    if (filter === "sd" && !["failed", "missing"].includes(cam.storage_state)) return false;
+    if (!query) return true;
+    return [cam.ip, cam.name, cam.location, cam.brand].join(" ").toLowerCase().includes(query);
+  });
+
+  list.sort((a, b) => {
+    const av = sortValue(a, sortKey), bv = sortValue(b, sortKey);
+    return (av < bv ? -1 : av > bv ? 1 : 0) * sortDir;
+  });
+
+  document.getElementById("rows").innerHTML = list.map((cam) => `
+    <tr>
+      <td>${statusCell(cam)}</td>
+      <td class="ip">${escapeHtml(cam.ip)}</td>
+      <td class="nowrap">${escapeHtml(cam.name)}</td>
+      <td>${escapeHtml(cam.location) || '<span class="dim">&mdash;</span>'}</td>
+      <td class="dim">${escapeHtml(cam.brand)}</td>
+      <td class="sd" title="${escapeHtml(cam.storage_message)}">${sdCell(cam)}</td>
+      <td class="num">${cam.uptime_24h === null || cam.uptime_24h === undefined ? '<span class="dim">&mdash;</span>' : cam.uptime_24h.toFixed(1) + "%"}</td>
+      <td class="num">${cam.latency_ms ? cam.latency_ms.toFixed(0) + " ms" : '<span class="dim">&mdash;</span>'}</td>
+      <td class="dim nowrap">${fmtTime(cam.last_online_at)}</td>
+    </tr>`).join("");
+
+  document.getElementById("empty").hidden = list.length > 0;
+  document.getElementById("shown").textContent =
+    `${list.length} of ${cameras.length} shown`;
+}
+
+async function refresh() {
+  try {
+    const response = await fetch("api/status", { cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    cameras = data.cameras;
+    renderTiles(data.summary);
+    renderRows();
+    document.getElementById("updated").textContent =
+      "Last checked " + fmtTime(data.last_checked_at) + " · refreshes every " + REFRESH_SECONDS + "s";
+
+    const events = await (await fetch("api/events?limit=25", { cache: "no-store" })).json();
+    document.getElementById("events").innerHTML = events.events.length
+      ? events.events.map((e) => {
+          const tone = e.severity === "critical" ? "critical" : "good";
+          return `<li><span class="ts">${fmtTime(e.ts)}</span>
+            <span class="pill"><span class="dot ${tone}"></span>${escapeHtml(e.ip)}</span>
+            ${escapeHtml(e.name)} &mdash; ${escapeHtml(e.message)}</li>`;
+        }).join("")
+      : '<li class="dim">No events yet.</li>';
+  } catch (err) {
+    document.getElementById("updated").textContent = "Could not reach the server: " + err.message;
+  }
+}
+
+document.querySelectorAll(".chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    filter = chip.dataset.filter;
+    document.querySelectorAll(".chip").forEach((other) =>
+      other.setAttribute("aria-pressed", String(other === chip)));
+    renderRows();
+  });
+});
+document.querySelectorAll("th[data-sort]").forEach((header) => {
+  header.addEventListener("click", () => {
+    const key = header.dataset.sort;
+    sortDir = (key === sortKey) ? -sortDir : 1;
+    sortKey = key;
+    renderRows();
+  });
+});
+document.getElementById("search").addEventListener("input", renderRows);
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+});
+
+refresh();
+setInterval(refresh, REFRESH_SECONDS * 1000);
+</script>
+</body>
+</html>

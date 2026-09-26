@@ -1,0 +1,4 @@
+# The tool deliberately keeps its dependencies small.
+requests>=2.25.0     # HTTP with digest authentication, for the SD card check
+PyYAML>=5.4          # reads config.yaml
+# Everything else (web server, database, scanning) uses the Python standard library.

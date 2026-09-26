@@ -1,0 +1,7 @@
+ip,name,location,brand,http_port,rtsp_port,username,password,enabled,notes
+192.168.1.11,Reception Entrance,Ground Floor Lobby,hikvision,80,554,,,yes,
+192.168.1.12,Reception Desk,Ground Floor Lobby,hikvision,80,554,,,yes,
+192.168.1.21,Parking Ramp,Basement,dahua,80,554,,,yes,different password,
+192.168.1.22,Parking Level 1,Basement,dahua,80,554,operator,SeparatePass123,yes,
+192.168.1.31,Server Room,3rd Floor,auto,8000,554,,,yes,brand detected on first scan
+192.168.1.99,Spare Camera,Store Room,auto,80,554,,,no,not installed yet

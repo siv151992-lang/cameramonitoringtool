@@ -1,0 +1,16 @@
+# Your real settings and camera list - these hold site details and passwords.
+config.yaml
+cameras.csv
+cameras.csv.tmp
+
+# Recorded status/history
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

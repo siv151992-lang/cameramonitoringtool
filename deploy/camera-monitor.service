@@ -1,0 +1,36 @@
+# Run the monitor as a background service on a Linux server.
+#
+#   sudo cp deploy/camera-monitor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now camera-monitor
+#   sudo systemctl status camera-monitor
+#   journalctl -u camera-monitor -f        # watch the log
+
+[Unit]
+Description=IP camera monitoring (online/offline and SD card health)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Change these three lines to match your server.
+User=camera-monitor
+WorkingDirectory=/opt/cameramonitoringtool
+Environment=CAMERA_PASSWORD=change-me
+# Environment=SMTP_PASSWORD=change-me
+# Environment=WEBHOOK_URL=https://...
+
+ExecStart=/usr/bin/python3 /opt/cameramonitoringtool/camtool.py monitor --serve
+Restart=always
+RestartSec=10
+
+# The tool only needs to read its own directory and talk to the network.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/cameramonitoringtool
+
+[Install]
+WantedBy=multi-user.target
