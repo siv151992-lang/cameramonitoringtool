@@ -59,7 +59,9 @@ checks:
   offline_after_failures: 2
 
   storage_check: true        # check SD card health at all
-  storage_every_n_cycles: 3  # SD check is slower, so run it every 3rd cycle
+  storage_every_n_cycles: 1  # 1 = check the SD card every cycle.
+                             # Raise to 2 or 3 to check it less often if the
+                             # cameras are slow to answer.
   history_retention_days: 30 # how long to keep history for uptime figures
 
 database:

@@ -226,7 +226,7 @@ def _write_back_detected_brands(
 def cmd_monitor(args: argparse.Namespace, config: Config) -> int:
     """Check on a loop, alerting when something changes."""
     interval = int(args.interval or config.get("checks.interval_seconds", 300))
-    storage_every = max(1, int(config.get("checks.storage_every_n_cycles", 3)))
+    storage_every = max(1, int(config.get("checks.storage_every_n_cycles", 1)))
     retention = int(config.get("checks.history_retention_days", 30))
 
     db = open_database(config)

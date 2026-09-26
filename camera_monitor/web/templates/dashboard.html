@@ -68,6 +68,8 @@
     text-decoration: none; display: inline-block; line-height: 1.5;
   }
   .ghost:hover { background: var(--hover); color: var(--text-primary); }
+  .ghost[disabled] { opacity: 0.55; cursor: default; }
+  .ghost[disabled]:hover { background: var(--surface-1); color: var(--text-secondary); }
 
   /* --- stat tiles --------------------------------------------------- */
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
@@ -142,6 +144,7 @@
     <h1>__SITE_NAME__ &mdash; Camera Status</h1>
     <span class="meta" id="updated">loading&hellip;</span>
     <span class="spacer"></span>
+    <button class="ghost" id="refresh-btn" type="button">Refresh</button>
     <button class="ghost" id="theme-toggle" type="button">Dark / light</button>
     <a class="ghost" href="export.csv">Download CSV</a>
   </header>
@@ -283,7 +286,19 @@ function renderRows() {
     `${list.length} of ${cameras.length} shown`;
 }
 
+// One fetch at a time: clicking Refresh while the timer is already fetching
+// should not start a second request.
+let inFlight = false;
+let autoTimer = null;
+
+function restartAutoRefresh() {
+  clearInterval(autoTimer);
+  autoTimer = setInterval(refresh, REFRESH_SECONDS * 1000);
+}
+
 async function refresh() {
+  if (inFlight) return;
+  inFlight = true;
   try {
     const response = await fetch("api/status", { cache: "no-store" });
     if (!response.ok) throw new Error("HTTP " + response.status);
@@ -305,6 +320,8 @@ async function refresh() {
       : '<li class="dim">No events yet.</li>';
   } catch (err) {
     document.getElementById("updated").textContent = "Could not reach the server: " + err.message;
+  } finally {
+    inFlight = false;
   }
 }
 
@@ -330,8 +347,20 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
 });
 
+document.getElementById("refresh-btn").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Refreshing\u2026";
+  await refresh();
+  button.textContent = "Refresh";
+  button.disabled = false;
+  // Start the countdown again so the next automatic refresh is a full
+  // interval away rather than landing a moment after this one.
+  restartAutoRefresh();
+});
+
 refresh();
-setInterval(refresh, REFRESH_SECONDS * 1000);
+restartAutoRefresh();
 </script>
 </body>
 </html>

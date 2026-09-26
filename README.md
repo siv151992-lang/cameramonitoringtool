@@ -280,9 +280,11 @@ tool reports it as a failure.
 Unrecognised status values are reported as *Unknown*, never as a failure, so
 unusual firmware produces no false alarms.
 
-Because the SD check is slower than a reachability check, `monitor` runs it
-every third cycle by default (`checks.storage_every_n_cycles`). Reachability is
-still checked every cycle.
+By default the SD card is checked on **every** cycle, alongside the
+reachability check, so a card failure is picked up within one interval — about
+5 minutes on default settings. The SD check is the slower of the two, so if your
+cameras are slow to answer you can run it less often by raising
+`checks.storage_every_n_cycles` to 2 or 3.
 
 ---
 
@@ -380,7 +382,7 @@ The defaults are chosen for roughly this size, but here is what to adjust:
 | `checks.workers` | 100 | Cameras checked at once. Raising it speeds up a cycle but adds network load. 200 is reasonable on a wired gigabit LAN. |
 | `checks.tcp_timeout` | 2.0 | Lower on a fast LAN (1.0) to finish sooner; raise if cameras over Wi-Fi or a VPN are wrongly reported offline. |
 | `checks.interval_seconds` | 300 | How often a full cycle runs. Must be longer than a cycle takes. |
-| `checks.storage_every_n_cycles` | 3 | SD checks are the slow part. Every 3rd cycle means a card failure is caught within about 15 minutes. |
+| `checks.storage_every_n_cycles` | 1 | SD card checked every cycle, so a failure is caught within one interval. Raise to 2 or 3 if the SD check makes a cycle too slow. |
 | `discovery.workers` | 256 | Only used during `discover`. |
 | `checks.history_retention_days` | 30 | History is pruned automatically. 1000 cameras at 5-minute intervals is roughly 300 MB per month. |
 

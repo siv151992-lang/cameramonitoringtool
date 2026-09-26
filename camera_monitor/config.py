@@ -49,7 +49,7 @@ DEFAULTS: dict[str, Any] = {
         "interval_seconds": 300,
         "offline_after_failures": 2,
         "storage_check": True,
-        "storage_every_n_cycles": 3,
+        "storage_every_n_cycles": 1,
         "history_retention_days": 30,
     },
     "database": {
