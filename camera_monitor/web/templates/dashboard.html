@@ -143,6 +143,13 @@
     padding: 16px 20px; display: flex; align-items: center; gap: 10px;
   }
   .dialog-head { border-bottom: 1px solid var(--gridline); }
+  .dialog-head .spacer { flex: 1; }
+  button.close-x {
+    background: none; border: none; color: var(--text-secondary);
+    font-size: 22px; line-height: 1; cursor: pointer;
+    padding: 2px 8px; border-radius: 6px;
+  }
+  button.close-x:hover { background: var(--hover); color: var(--text-primary); }
   .dialog-foot { border-top: 1px solid var(--gridline); justify-content: flex-end; }
   .dialog-body { padding: 16px 20px; display: grid; gap: 12px; }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -222,13 +229,20 @@
 
   <dialog id="add-dialog">
     <form method="dialog" id="add-form">
-      <div class="dialog-head"><h2>Add a camera</h2></div>
+      <div class="dialog-head">
+        <h2 id="dialog-title">Add a camera</h2>
+        <span class="spacer"></span>
+        <button type="button" class="close-x" id="add-close" title="Close" aria-label="Close">&times;</button>
+      </div>
       <div class="dialog-body">
         <div id="add-notice" class="notice"></div>
         <div class="grid-2">
           <div class="field">
             <label for="f-ip">IP address <span class="req">*</span></label>
             <input id="f-ip" name="ip" required placeholder="10.10.12.64" autocomplete="off">
+            <div class="dim" id="ip-hint" style="font-size:12px; margin-top:4px" hidden>
+              To change the address, remove the camera and add it again.
+            </div>
           </div>
           <div class="field">
             <label for="f-name">Name</label>
@@ -266,8 +280,12 @@
           </div>
         </div>
         <div class="checkline">
+          <input type="checkbox" id="f-enabled" checked>
+          <label for="f-enabled" style="margin:0">Check this camera (untick to pause it)</label>
+        </div>
+        <div class="checkline">
           <input type="checkbox" id="f-check" checked>
-          <label for="f-check" style="margin:0">Test the connection after adding</label>
+          <label for="f-check" style="margin:0" id="check-label">Test the connection after adding</label>
         </div>
       </div>
       <div class="dialog-foot">
@@ -377,8 +395,10 @@ function renderRows() {
       <td class="num">${cam.uptime_24h === null || cam.uptime_24h === undefined ? '<span class="dim">&mdash;</span>' : cam.uptime_24h.toFixed(1) + "%"}</td>
       <td class="num">${cam.latency_ms ? cam.latency_ms.toFixed(0) + " ms" : '<span class="dim">&mdash;</span>'}</td>
       <td class="dim nowrap">${fmtTime(cam.last_online_at)}</td>
-      ${ALLOW_EDITING ? `<td class="nowrap"><button class="row-action" data-remove="${escapeHtml(cam.ip)}"
-           title="Remove this camera from the list">Remove</button></td>` : ""}
+      ${ALLOW_EDITING ? `<td class="nowrap">
+           <button class="row-action" data-edit="${escapeHtml(cam.ip)}" title="Edit this camera">Edit</button>
+           <button class="row-action" data-remove="${escapeHtml(cam.ip)}" title="Remove this camera from the list">Remove</button>
+         </td>` : ""}
     </tr>`).join("");
 
   document.getElementById("empty").hidden = list.length > 0;
@@ -483,15 +503,49 @@ if (ALLOW_EDITING) {
     })
     .catch(() => {});
 
-  document.getElementById("add-btn").addEventListener("click", () => {
-    document.getElementById("add-form").reset();
-    document.getElementById("f-check").checked = true;
-    setNotice("", "");
-    dialog.showModal();
-    document.getElementById("f-ip").focus();
-  });
+  // The same dialog does both jobs; editingIp is null when adding.
+  let editingIp = null;
 
+  function openDialog(camera) {
+    const form = document.getElementById("add-form");
+    form.reset();
+    editingIp = camera ? camera.ip : null;
+    setNotice("", "");
+
+    const ipField = document.getElementById("f-ip");
+    document.getElementById("dialog-title").textContent =
+      camera ? "Edit camera" : "Add a camera";
+    document.getElementById("add-save").textContent =
+      camera ? "Save changes" : "Add camera";
+    document.getElementById("check-label").textContent =
+      camera ? "Test the connection after saving" : "Test the connection after adding";
+    document.getElementById("ip-hint").hidden = !camera;
+    ipField.readOnly = Boolean(camera);
+
+    if (camera) {
+      ipField.value = camera.ip;
+      document.getElementById("f-name").value = camera.name || "";
+      document.getElementById("f-location").value = camera.location || "";
+      document.getElementById("f-brand").value = camera.brand || "auto";
+      document.getElementById("f-http").value = camera.http_port || "";
+      document.getElementById("f-rtsp").value = camera.rtsp_port || "";
+      document.getElementById("f-user").value = camera.username || "";
+      document.getElementById("f-pass").placeholder =
+        camera.has_password ? "unchanged" : "";
+      document.getElementById("f-enabled").checked = camera.enabled !== false;
+    } else {
+      document.getElementById("f-pass").placeholder = "";
+      document.getElementById("f-enabled").checked = true;
+    }
+    document.getElementById("f-check").checked = true;
+
+    dialog.showModal();
+    (camera ? document.getElementById("f-name") : ipField).focus();
+  }
+
+  document.getElementById("add-btn").addEventListener("click", () => openDialog(null));
   document.getElementById("add-cancel").addEventListener("click", () => dialog.close());
+  document.getElementById("add-close").addEventListener("click", () => dialog.close());
 
   // Clear a previous error as soon as the operator starts changing the form,
   // so a stale message cannot be mistaken for the current one - the browser's
@@ -515,12 +569,16 @@ if (ALLOW_EDITING) {
       check: document.getElementById("f-check").checked,
     };
 
+    body.enabled = document.getElementById("f-enabled").checked;
+    if (editingIp) body.ip = editingIp;   // the field is read-only, but never trust it
+
+    const saving = Boolean(editingIp);
     save.disabled = true;
-    save.textContent = body.check ? "Adding and testing\u2026" : "Adding\u2026";
+    save.textContent = saving ? "Saving\u2026" : (body.check ? "Adding and testing\u2026" : "Adding\u2026");
     setNotice("", "");
     try {
-      const result = await postJson("api/cameras", body);
-      let message = `Added ${result.camera.ip}.`;
+      const result = await postJson(saving ? "api/cameras/update" : "api/cameras", body);
+      let message = `${saving ? "Saved" : "Added"} ${result.camera.ip}.`;
       if (result.check) {
         message += result.check.online
           ? ` It is online${result.check.storage_state ? ", SD card: " + result.check.storage_state : ""}.`
@@ -541,12 +599,31 @@ if (ALLOW_EDITING) {
       setNotice(err.message, "error");
     } finally {
       save.disabled = false;
-      save.textContent = "Add camera";
+      save.textContent = editingIp ? "Save changes" : "Add camera";
     }
   });
 
-  // Row "Remove" buttons are created on every render, so listen on the table.
+  // Row buttons are rebuilt on every render, so listen on the table instead.
   document.getElementById("rows").addEventListener("click", async (event) => {
+    const editButton = event.target.closest("[data-edit]");
+    if (editButton) {
+      const ip = editButton.dataset.edit;
+      editButton.disabled = true;
+      try {
+        // Ports, username and the enabled flag live in the camera list rather
+        // than the status table, so fetch the real row to fill the form.
+        const data = await (await fetch("api/cameras", { cache: "no-store" })).json();
+        const camera = (data.cameras || []).find((item) => item.ip === ip);
+        if (!camera) throw new Error("it is no longer in the camera list");
+        openDialog(camera);
+      } catch (err) {
+        alert("Could not open " + ip + " for editing: " + err.message);
+      } finally {
+        editButton.disabled = false;
+      }
+      return;
+    }
+
     const button = event.target.closest("[data-remove]");
     if (!button) return;
     const ip = button.dataset.remove;

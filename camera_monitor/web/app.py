@@ -117,6 +117,54 @@ def status_payload(db: Database) -> dict[str, Any]:
     }
 
 
+def _persist_detected_brand(config: Config, ip: str, detected: str) -> None:
+    """Record the vendor that answered, matching what the CLI does.
+
+    Without this the camera list keeps saying "auto" for a camera we have
+    already identified, and every later check re-runs the guessing.
+    """
+    if not detected or detected in ("unknown", "auto"):
+        return
+    with _inventory_lock:
+        path = config.path_for("inventory.file")
+        if not path.exists():
+            return
+        cameras = load_cameras(path)
+        changed = False
+        for camera in cameras:
+            if camera.ip == ip and camera.brand != detected:
+                camera.brand = detected
+                changed = True
+        if changed:
+            save_cameras(path, cameras)
+
+
+def inventory_payload(config: Config) -> list[dict[str, Any]]:
+    """The camera list as the edit dialog needs it.
+
+    Passwords are never sent to the browser; the form reports only whether one
+    is set, and an empty password field on save means "leave it alone".
+    """
+    path = config.path_for("inventory.file")
+    if not path.exists():
+        return []
+    return [
+        {
+            "ip": camera.ip,
+            "name": camera.name,
+            "location": camera.location,
+            "brand": camera.brand,
+            "http_port": camera.http_port,
+            "rtsp_port": camera.rtsp_port,
+            "username": camera.username,
+            "has_password": bool(camera.password),
+            "enabled": camera.enabled,
+            "notes": camera.notes,
+        }
+        for camera in load_cameras(path)
+    ]
+
+
 def status_csv(db: Database) -> str:
     """The same data as a spreadsheet-friendly export."""
     payload = status_payload(db)
@@ -296,17 +344,97 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Record it like any other check, so the new camera appears in the
             # table immediately instead of waiting for the next monitor cycle.
             apply_results(self.db, [outcome], self.config)
+            _persist_detected_brand(self.config, camera.ip, outcome.detected_brand)
             result["check"] = {
                 "online": outcome.online,
                 "latency_ms": outcome.latency_ms,
                 "error": outcome.error,
                 "storage_state": outcome.storage.state.value if outcome.storage_checked else None,
                 "storage_message": outcome.storage.summary if outcome.storage_checked else "",
+                "brand": outcome.detected_brand or None,
             }
         else:
             # Nothing has checked it yet, so there is no row to show. Say so
             # rather than leaving the operator wondering where it went.
             result["pending"] = True
+        self._json(result)
+
+    def _update_camera(self, payload: dict[str, Any]) -> None:
+        """Change an existing camera's details.
+
+        The IP address is the key for status, history and events, so it is not
+        editable here - a camera at a new address is a different camera, and
+        the operator removes and re-adds it.
+        """
+        ip = str(payload.get("ip") or "").strip()
+        if not ip:
+            self._json({"error": "no IP address given"}, status=400)
+            return
+
+        text = lambda key: str(payload.get(key) or "").strip()
+        brand = text("brand").lower() or "auto"
+        if brand not in KNOWN_BRANDS:
+            self._json({"error": f"unknown brand '{brand}'"}, status=400)
+            return
+
+        try:
+            http_port = _port(payload.get("http_port"), 80, "web port")
+            rtsp_port = _port(payload.get("rtsp_port"), 554, "video port")
+        except ValueError as exc:
+            self._json({"error": str(exc)}, status=400)
+            return
+
+        inventory_path = self.config.path_for("inventory.file")
+        with _inventory_lock:
+            if not inventory_path.exists():
+                self._json({"error": "the camera list does not exist yet"}, status=404)
+                return
+            cameras = load_cameras(inventory_path)
+            current = next((item for item in cameras if item.ip == ip), None)
+            if current is None:
+                self._json({"error": f"{ip} is not in the camera list"}, status=404)
+                return
+
+            # An empty password means "leave it as it is", not "clear it" -
+            # the browser is never sent the existing one to put back.
+            new_password = str(payload.get("password") or "")
+            try:
+                updated = Camera(
+                    ip=ip,
+                    name=text("name"),
+                    location=text("location"),
+                    brand=brand,
+                    http_port=http_port,
+                    rtsp_port=rtsp_port,
+                    username=text("username"),
+                    password=new_password or current.password,
+                    enabled=payload.get("enabled", True) is not False,
+                    notes=text("notes") or current.notes,
+                )
+            except InventoryError as exc:
+                self._json({"error": str(exc)}, status=400)
+                return
+
+            cameras = [updated if item.ip == ip else item for item in cameras]
+            save_cameras(inventory_path, cameras)
+            self.db.update_identity(ip, updated.name, updated.location, updated.brand)
+
+        result: dict[str, Any] = {
+            "ok": True,
+            "camera": {"ip": updated.ip, "name": updated.name, "location": updated.location},
+        }
+        if payload.get("check") and updated.enabled:
+            outcome = check_camera(updated, self.config, True)
+            apply_results(self.db, [outcome], self.config)
+            _persist_detected_brand(self.config, updated.ip, outcome.detected_brand)
+            result["check"] = {
+                "online": outcome.online,
+                "latency_ms": outcome.latency_ms,
+                "error": outcome.error,
+                "storage_state": outcome.storage.state.value if outcome.storage_checked else None,
+                "storage_message": outcome.storage.summary if outcome.storage_checked else "",
+                "brand": outcome.detected_brand or None,
+            }
         self._json(result)
 
     def _remove_camera(self, payload: dict[str, Any]) -> None:
@@ -341,7 +469,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         route = urlparse(self.path).path.rstrip("/") or "/"
-        if route not in ("/api/cameras", "/api/cameras/remove"):
+        if route not in ("/api/cameras", "/api/cameras/update", "/api/cameras/remove"):
             self._json({"error": "not found"}, status=404)
             return
 
@@ -364,6 +492,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             if route == "/api/cameras":
                 self._add_camera(payload)
+            elif route == "/api/cameras/update":
+                self._update_camera(payload)
             else:
                 self._remove_camera(payload)
         except (InventoryError, OSError) as exc:
@@ -414,6 +544,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             elif route == "/healthz":
                 self._json({"ok": True})
+            elif route == "/api/cameras":
+                self._json({"cameras": inventory_payload(self.config)})
             elif route == "/api/config":
                 self._json(
                     {

@@ -275,3 +275,130 @@ class NewCameraAppearsTests(WebEditingBase):
         self.assertEqual(status, 200)
         self.assertTrue(body["pending"], "the operator must be told it is not in the table yet")
         self.assertEqual(self.status_rows(), [])
+
+
+class EditCameraTests(WebEditingBase):
+    def inventory(self):
+        with urllib.request.urlopen(self.base + "/api/cameras", timeout=5) as response:
+            return json.loads(response.read())["cameras"]
+
+    def setUp(self):
+        super().setUp()
+        self.post(
+            "/api/cameras",
+            {
+                "ip": "10.10.12.64", "name": "Old Name", "location": "Old Place",
+                "brand": "hikvision", "http_port": 80, "username": "admin",
+                "password": "original", "check": False,
+            },
+        )
+
+    def test_fields_are_updated(self):
+        status, _ = self.post(
+            "/api/cameras/update",
+            {
+                "ip": "10.10.12.64", "name": "New Name", "location": "New Place",
+                "brand": "dahua", "http_port": 8000, "rtsp_port": 8554,
+                "username": "operator", "check": False,
+            },
+        )
+        self.assertEqual(status, 200)
+        camera = self.cameras()[0]
+        self.assertEqual(camera.name, "New Name")
+        self.assertEqual(camera.location, "New Place")
+        self.assertEqual(camera.brand, "dahua")
+        self.assertEqual(camera.http_port, 8000)
+        self.assertEqual(camera.rtsp_port, 8554)
+        self.assertEqual(camera.username, "operator")
+
+    def test_blank_password_keeps_the_existing_one(self):
+        self.post("/api/cameras/update", {"ip": "10.10.12.64", "name": "X", "check": False})
+        self.assertEqual(self.cameras()[0].password, "original")
+
+    def test_a_new_password_replaces_it(self):
+        self.post(
+            "/api/cameras/update",
+            {"ip": "10.10.12.64", "name": "X", "password": "changed", "check": False},
+        )
+        self.assertEqual(self.cameras()[0].password, "changed")
+
+    def test_passwords_are_never_sent_to_the_browser(self):
+        entry = self.inventory()[0]
+        self.assertNotIn("password", entry)
+        self.assertTrue(entry["has_password"])
+
+    def test_inventory_listing_carries_what_the_form_needs(self):
+        entry = self.inventory()[0]
+        for key in ("ip", "name", "location", "brand", "http_port", "rtsp_port",
+                    "username", "enabled"):
+            self.assertIn(key, entry)
+
+    def test_a_camera_can_be_paused_and_resumed(self):
+        self.post("/api/cameras/update", {"ip": "10.10.12.64", "enabled": False, "check": False})
+        self.assertFalse(self.cameras()[0].enabled)
+        self.post("/api/cameras/update", {"ip": "10.10.12.64", "enabled": True, "check": False})
+        self.assertTrue(self.cameras()[0].enabled)
+
+    def test_editing_an_unknown_camera_is_a_404(self):
+        status, _ = self.post("/api/cameras/update", {"ip": "10.10.12.99", "name": "X"})
+        self.assertEqual(status, 404)
+
+    def test_a_bad_port_is_refused_and_nothing_changes(self):
+        status, body = self.post(
+            "/api/cameras/update", {"ip": "10.10.12.64", "name": "X", "http_port": "99999"}
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("between 1 and 65535", body["error"])
+        self.assertEqual(self.cameras()[0].name, "Old Name")
+
+    def test_unknown_brand_is_refused(self):
+        status, _ = self.post("/api/cameras/update", {"ip": "10.10.12.64", "brand": "sony"})
+        self.assertEqual(status, 400)
+
+    def test_rename_reaches_the_dashboard_table_at_once(self):
+        # Status rows carry the label, so an edit must update them too or the
+        # table shows the old name until the next check.
+        self.db.upsert_status([{
+            "ip": "10.10.12.64", "name": "Old Name", "location": "Old Place",
+            "brand": "hikvision", "online": 1, "consecutive_failures": 0,
+            "latency_ms": 2.0, "error": "", "storage_state": "ok",
+            "storage_message": "", "storage_checked_at": None,
+            "last_checked_at": None, "last_online_at": None, "last_change_at": None,
+        }])
+        self.post(
+            "/api/cameras/update",
+            {"ip": "10.10.12.64", "name": "Renamed", "location": "Lobby", "check": False},
+        )
+        row = self.db.all_status()[0]
+        self.assertEqual(row["name"], "Renamed")
+        self.assertEqual(row["location"], "Lobby")
+
+    def test_editing_is_refused_cross_site(self):
+        status, _ = self.post(
+            "/api/cameras/update", {"ip": "10.10.12.64", "name": "X"},
+            origin="http://evil.example.com",
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self.cameras()[0].name, "Old Name")
+
+
+class EditDisabledTests(WebEditingBase):
+    config_text = CONFIG.replace("allow_editing: true", "allow_editing: false")
+
+    def test_update_is_refused_when_editing_is_off(self):
+        status, _ = self.post("/api/cameras/update", {"ip": "10.10.12.64", "name": "X"})
+        self.assertEqual(status, 403)
+
+
+class BrandDetectionTests(WebEditingBase):
+    def test_detected_brand_is_written_back_to_the_camera_list(self):
+        # Added as 'auto'; the check identifies it, and the list should say so
+        # rather than re-running the guessing on every later check.
+        with FakeCamera(brand="dahua", storage="ok") as camera:
+            status, body = self.post(
+                "/api/cameras",
+                {"ip": "127.0.0.1", "brand": "auto", "http_port": camera.port, "check": True},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["check"]["brand"], "dahua")
+        self.assertEqual(self.cameras()[0].brand, "dahua")

@@ -179,15 +179,27 @@ optionally with a name and location:
 python3 camtool.py add --from-file camera-ips.txt
 ```
 
-### Adding cameras from the dashboard
+### Managing cameras from the dashboard
 
-The dashboard has an **+ Add camera** button that does the same thing without
-the command line. Fill in the address, optionally a name and location, and
-leave *Test the connection after adding* ticked — the camera is probed straight
-away and the result is reported in the dialog, so a wrong address or password
-is obvious immediately.
+The dashboard can do all of this without the command line.
 
-Each row also gets a **Remove** link.
+**+ Add camera** (top right) opens a form. Fill in the address, optionally a
+name and location, and leave *Test the connection after adding* ticked — the
+camera is probed straight away and the result is reported in the dialog, so a
+wrong address or password is obvious immediately. Close it with the **×**,
+Cancel, or the Escape key.
+
+Every row has **Edit** and **Remove** links:
+
+- **Edit** opens the same form filled in with that camera's details. Change the
+  name, location, brand, ports or credentials and save. Leave the password
+  blank to keep the existing one — the browser is never sent it.
+  The IP address cannot be changed here, because it is the key under which
+  history and events are recorded; to move a camera to a new address, remove it
+  and add it again.
+- **Check this camera** can be unticked to pause a camera without deleting it,
+  which is the same as setting `enabled` to `no` in the CSV.
+- **Remove** deletes it, after a confirmation.
 
 This is on by default. To keep the dashboard strictly read-only, set:
 

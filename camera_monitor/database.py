@@ -125,6 +125,21 @@ class Database:
             self._conn.executemany(sql, rows)
             self._conn.commit()
 
+    def update_identity(self, ip: str, name: str, location: str, brand: str) -> bool:
+        """Rename a camera in the status table without waiting for a check.
+
+        Status rows carry the name and location so the dashboard can show them,
+        so an edit has to reach here too or the table keeps the old label until
+        the next cycle.
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE status SET name = ?, location = ?, brand = ? WHERE ip = ?",
+                (name, location, brand, ip),
+            )
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     def remove_missing(self, keep_ips: Iterable[str]) -> int:
         """Drop status rows for cameras no longer in the inventory CSV."""
         keep = set(keep_ips)
