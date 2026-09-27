@@ -402,3 +402,23 @@ class BrandDetectionTests(WebEditingBase):
         self.assertEqual(status, 200)
         self.assertEqual(body["check"]["brand"], "dahua")
         self.assertEqual(self.cameras()[0].brand, "dahua")
+
+
+class ThemeToggleTests(WebEditingBase):
+    def page(self):
+        with urllib.request.urlopen(self.base + "/", timeout=5) as response:
+            return response.read().decode()
+
+    def test_the_toggle_is_an_icon_with_a_text_label_for_screen_readers(self):
+        html = self.page()
+        self.assertNotIn("Dark / light", html)
+        self.assertIn('id="icon-sun"', html)
+        self.assertIn('id="icon-moon"', html)
+        self.assertIn('aria-label="Switch theme"', html)
+
+    def test_the_saved_theme_is_restored_before_the_body_renders(self):
+        # The restore snippet must sit in <head>, or a saved dark choice shows
+        # a white flash on every load.
+        html = self.page()
+        head = html.split("</head>")[0]
+        self.assertIn("camtool-theme", head)

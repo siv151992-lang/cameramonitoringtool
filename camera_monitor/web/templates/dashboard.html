@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__SITE_NAME__ - Camera Status</title>
+<script>
+  // Runs before the body renders so a saved dark choice does not flash white.
+  try {
+    var saved = localStorage.getItem("camtool-theme");
+    if (saved === "dark" || saved === "light") {
+      document.documentElement.setAttribute("data-theme", saved);
+    }
+  } catch (e) { /* private browsing: fall back to the OS setting */ }
+</script>
 <style>
   /* Status palette is fixed and never themed; surfaces and ink swap by mode. */
   :root {
@@ -69,6 +78,9 @@
   }
   .ghost:hover { background: var(--hover); color: var(--text-primary); }
   .ghost[disabled] { opacity: 0.55; cursor: default; }
+  .icon-btn { padding: 6px 9px; display: inline-flex; align-items: center; justify-content: center; }
+  .icon-btn svg { display: block; }
+  .icon-btn svg.hidden-icon { display: none; }
   .ghost[disabled]:hover { background: var(--surface-1); color: var(--text-secondary); }
 
   /* --- stat tiles --------------------------------------------------- */
@@ -191,7 +203,20 @@
     <span class="spacer"></span>
     <button class="ghost" id="add-btn" type="button" hidden>+ Add camera</button>
     <button class="ghost" id="refresh-btn" type="button">Refresh</button>
-    <button class="ghost" id="theme-toggle" type="button">Dark / light</button>
+    <button class="ghost icon-btn" id="theme-toggle" type="button"
+            title="Switch theme" aria-label="Switch theme">
+      <svg id="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+      <svg id="icon-sun" class="hidden-icon" width="16" height="16" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           aria-hidden="true">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+      </svg>
+    </button>
     <a class="ghost" href="export.csv">Download CSV</a>
   </header>
 
@@ -462,10 +487,42 @@ document.querySelectorAll("th[data-sort]").forEach((header) => {
   });
 });
 document.getElementById("search").addEventListener("input", renderRows);
+// --- theme toggle --------------------------------------------------------
+
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function isDark() {
+  // No explicit choice yet means we are following the operating system, so
+  // read that rather than assuming light - otherwise the first click on a
+  // machine already in dark mode appears to do nothing.
+  const chosen = document.documentElement.getAttribute("data-theme");
+  return chosen ? chosen === "dark" : darkQuery.matches;
+}
+
+function updateThemeButton() {
+  const dark = isDark();
+  // Show the icon for what a click will do next.
+  document.getElementById("icon-sun").classList.toggle("hidden-icon", !dark);
+  document.getElementById("icon-moon").classList.toggle("hidden-icon", dark);
+  const button = document.getElementById("theme-toggle");
+  const label = dark ? "Switch to light theme" : "Switch to dark theme";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
 document.getElementById("theme-toggle").addEventListener("click", () => {
-  const dark = document.documentElement.getAttribute("data-theme") === "dark";
-  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  const next = isDark() ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("camtool-theme", next); } catch (e) { /* ignore */ }
+  updateThemeButton();
 });
+
+// Keep the icon honest if the operating system flips while we are following it.
+darkQuery.addEventListener("change", () => {
+  if (!document.documentElement.getAttribute("data-theme")) updateThemeButton();
+});
+
+updateThemeButton();
 
 // --- adding and removing cameras ----------------------------------------
 
