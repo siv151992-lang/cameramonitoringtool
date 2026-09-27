@@ -30,7 +30,7 @@ from camera_monitor.inventory import (
     merge_discovered,
     save_cameras,
 )
-from camera_monitor.probes import sdcard
+from camera_monitor.probes import sdcard, snmp
 
 STOP = threading.Event()
 
@@ -586,6 +586,88 @@ def cmd_identify(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_snmp(args: argparse.Namespace, config: Config) -> int:
+    """Read OIDs from a camera, or list everything it exposes.
+
+    This is the answer to "I do not have the vendor MIB file": a MIB only puts
+    names to numbers, and the agent itself will tell you which numbers it
+    serves.
+    """
+    community = args.community or str(config.get("snmp.community", "public"))
+    version = args.version or str(config.get("snmp.version", "2c"))
+    port = args.port or int(config.get("snmp.port", 161))
+    timeout = args.timeout or float(config.get("snmp.timeout", 2.0))
+    retries = int(config.get("snmp.retries", 1))
+
+    if args.walk:
+        root = args.walk if isinstance(args.walk, str) else "1.3.6.1.2.1"
+        print(f"Walking {args.ip} from {root} (community '{community}', SNMP v{version}) ...")
+        try:
+            entries = snmp.walk(
+                args.ip, root, community, version, port, timeout, retries, limit=args.limit
+            )
+        except snmp.SnmpError as exc:
+            print(f"\nSNMP failed: {exc}")
+            print(_snmp_hint(exc))
+            return 1
+        if not entries:
+            print("\nThe agent answered but returned nothing under that OID.")
+            return 1
+        print_table(
+            [[oid, str(value)[:70]] for oid, value in entries],
+            ["OID", "Value"],
+        )
+        print(f"\n{len(entries)} value(s).", end=" ")
+        if len(entries) >= args.limit:
+            print(f"Stopped at the --limit of {args.limit}; raise it to see more.")
+        else:
+            print("Copy the ones you want into 'snmp.oids' in config.yaml.")
+        return 0
+
+    named = dict(config.get("snmp.oids", {}) or {})
+    if args.oid:
+        named = {oid: oid for oid in args.oid}
+    if not named:
+        named = {
+            "description": snmp.SYS_DESCR,
+            "name": snmp.SYS_NAME,
+            "uptime": snmp.SYS_UPTIME,
+            "object id": snmp.SYS_OBJECT_ID,
+        }
+
+    by_oid = {oid: label for label, oid in named.items()}
+    try:
+        answers = snmp.get(args.ip, list(by_oid), community, version, port, timeout, retries)
+    except snmp.SnmpError as exc:
+        print(f"SNMP failed: {exc}")
+        print(_snmp_hint(exc))
+        return 1
+
+    rows = []
+    for oid, value in answers.items():
+        label = by_oid.get(oid, "")
+        shown = snmp.format_uptime(value) if oid == snmp.SYS_UPTIME else str(value)
+        rows.append([label, oid, shown[:60]])
+    print_table(rows, ["Name", "OID", "Value"])
+    return 0
+
+
+def _snmp_hint(error: Exception) -> str:
+    """Point at the usual causes rather than leaving a bare error."""
+    text = str(error).lower()
+    if "no reply" in text:
+        return (
+            "  No reply usually means one of:\n"
+            "    - SNMP is not enabled on the camera (Configuration > Network >\n"
+            "      Advanced Settings > SNMP in its web interface)\n"
+            "    - the community string is wrong (try the one set on the camera)\n"
+            "    - UDP port 161 is blocked, or this machine cannot reach the camera"
+        )
+    if "no such name" in text:
+        return "  That OID does not exist on this device. Use --walk to see what does."
+    return ""
+
+
 def cmd_test_alert(args: argparse.Namespace, config: Config) -> int:
     """Send a sample notification to prove the email/webhook settings work."""
     with open_database(config) as db:
@@ -708,6 +790,33 @@ def build_parser() -> argparse.ArgumentParser:
     identify = sub.add_parser("identify", help="read model/firmware and record each camera's brand")
     identify.add_argument("--ip", action="append", help="limit to these IPs (repeatable)")
     identify.set_defaults(func=cmd_identify)
+
+    snmp_cmd = sub.add_parser(
+        "snmp",
+        help="read SNMP values from a camera, or list everything it exposes",
+        description="Query a camera over SNMP. No vendor MIB file is needed: a MIB "
+                    "only puts names to numeric OIDs, and --walk asks the camera "
+                    "itself which OIDs it serves.",
+        epilog="Examples:\n"
+               "  python3 camtool.py snmp 10.10.12.64\n"
+               "  python3 camtool.py snmp 10.10.12.64 --walk\n"
+               "  python3 camtool.py snmp 10.10.12.64 --walk 1.3.6.1.4.1\n"
+               "  python3 camtool.py snmp 10.10.12.64 --oid 1.3.6.1.2.1.1.3.0\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    snmp_cmd.add_argument("ip", help="the camera's IP address")
+    snmp_cmd.add_argument(
+        "--walk", nargs="?", const="1.3.6.1.2.1", metavar="OID",
+        help="list every OID under this one (default: the standard MIB-II tree). "
+             "Use 1.3.6.1.4.1 for the vendor's private tree.",
+    )
+    snmp_cmd.add_argument("--oid", action="append", help="read one OID (repeatable)")
+    snmp_cmd.add_argument("--community", help="default: from config.yaml, else 'public'")
+    snmp_cmd.add_argument("--version", choices=["1", "2c"], help="default: 2c")
+    snmp_cmd.add_argument("--port", type=int, help="default: 161")
+    snmp_cmd.add_argument("--timeout", type=float, help="seconds to wait for a reply")
+    snmp_cmd.add_argument("--limit", type=int, default=200, help="max values from a walk")
+    snmp_cmd.set_defaults(func=cmd_snmp)
 
     test = sub.add_parser("test-alert", help="send a test email/webhook notification")
     test.set_defaults(func=cmd_test_alert)

@@ -52,6 +52,23 @@ DEFAULTS: dict[str, Any] = {
         "storage_every_n_cycles": 1,
         "history_retention_days": 30,
     },
+    "snmp": {
+        "enabled": False,
+        "version": "2c",
+        "community": "public",
+        "port": 161,
+        "timeout": 2.0,
+        "retries": 1,
+        # Treat a camera that answers SNMP as online even when its web and
+        # video ports do not respond.
+        "use_for_reachability": True,
+        # Extra readings to collect. Friendly name -> numeric OID.
+        "oids": {},
+        # Optional: read SD card health over SNMP, for cameras whose vendor API
+        # cannot be used. Find the OID with 'camtool.py snmp <ip> --walk'.
+        "sd_card_oid": "",
+        "sd_card_ok_values": ["1", "ok", "normal", "true"],
+    },
     "database": {
         "file": "data/monitor.db",
     },

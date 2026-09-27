@@ -14,7 +14,7 @@ from typing import Any, Callable
 from camera_monitor.config import Config
 from camera_monitor.database import Database, utc_now
 from camera_monitor.inventory import Camera
-from camera_monitor.probes import sdcard
+from camera_monitor.probes import sdcard, snmp
 from camera_monitor.probes.base import StorageInfo, StorageState
 from camera_monitor.probes.reachability import check_reachable
 
@@ -30,6 +30,9 @@ class CheckResult:
     storage: StorageInfo = field(default_factory=StorageInfo)
     storage_checked: bool = False
     detected_brand: str = ""
+    # Readings collected over SNMP, when it is enabled and answering.
+    snmp_values: dict[str, Any] = field(default_factory=dict)
+    snmp_error: str = ""
 
 
 def check_camera(
@@ -53,7 +56,11 @@ def check_camera(
         error=reach.error,
     )
 
-    if not reach.online or not with_storage:
+    snmp_enabled = bool(config.get("snmp.enabled", False))
+    if snmp_enabled:
+        _collect_snmp(result, camera, config, tried_because_offline=not reach.online)
+
+    if not result.online or not with_storage:
         return result
 
     username = camera.username or config.credentials_for(camera.ip)[0]
@@ -72,7 +79,70 @@ def check_camera(
     result.storage = info
     result.storage_checked = True
     result.detected_brand = detected
+
+    if info.state is StorageState.UNKNOWN and snmp_enabled:
+        _storage_from_snmp(result, config)
     return result
+
+
+def _collect_snmp(
+    result: CheckResult, camera: Camera, config: Config, tried_because_offline: bool
+) -> None:
+    """Read the configured OIDs, and optionally use SNMP as a liveness signal."""
+    community = str(config.get("snmp.community", "public"))
+    version = str(config.get("snmp.version", "2c"))
+    port = int(config.get("snmp.port", 161))
+    timeout = float(config.get("snmp.timeout", 2.0))
+    retries = int(config.get("snmp.retries", 1))
+
+    named_oids: dict[str, str] = dict(config.get("snmp.oids", {}) or {})
+    sd_oid = str(config.get("snmp.sd_card_oid", "") or "")
+    if sd_oid:
+        named_oids.setdefault("_sd_card", sd_oid)
+    # Always ask for uptime, so there is something to prove the agent is alive
+    # even when no OIDs have been configured yet.
+    if not named_oids:
+        named_oids["uptime"] = snmp.SYS_UPTIME
+
+    by_oid = {oid: name for name, oid in named_oids.items()}
+    try:
+        answers = snmp.get(
+            camera.ip, list(by_oid), community, version, port, timeout, retries
+        )
+    except snmp.SnmpError as exc:
+        result.snmp_error = str(exc)
+        return
+
+    result.snmp_values = {by_oid.get(oid, oid): value for oid, value in answers.items()}
+
+    # The agent answered, so the device is on the network even if its camera
+    # ports are not listening.
+    if tried_because_offline and config.get("snmp.use_for_reachability", True):
+        result.online = True
+        result.error = (
+            "camera ports did not answer, but the device replied to SNMP"
+            + (f" ({result.error})" if result.error else "")
+        )
+
+
+def _storage_from_snmp(result: CheckResult, config: Config) -> None:
+    """Map an SNMP reading onto an SD card state, if one is configured."""
+    if "_sd_card" not in result.snmp_values:
+        return
+    raw = result.snmp_values["_sd_card"]
+    ok_values = {
+        str(value).strip().lower()
+        for value in (config.get("snmp.sd_card_ok_values", []) or [])
+    }
+    if not ok_values:
+        return
+    healthy = str(raw).strip().lower() in ok_values
+    result.storage = StorageInfo(
+        state=StorageState.OK if healthy else StorageState.FAILED,
+        message=f"SNMP reported '{raw}'",
+        brand=result.storage.brand,
+    )
+    result.storage_checked = True
 
 
 def run_checks(

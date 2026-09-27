@@ -381,6 +381,84 @@ cameras are slow to answer you can run it less often by raising
 
 ---
 
+## SNMP (optional)
+
+The tool can also poll cameras over SNMP. It is off by default, because SNMP
+has to be switched on in each camera first.
+
+### You do not need a MIB file
+
+A MIB is only a dictionary: it gives readable names to numeric OIDs like
+`1.3.6.1.2.1.1.3.0`. SNMP itself works with the numbers, so a missing vendor
+MIB does not stop you. Better still, the camera will list what it serves:
+
+```bash
+python3 camtool.py snmp 10.10.12.64 --walk
+```
+
+```
+  OID                Value
+  -----------------  ---------------------------------------------
+  1.3.6.1.2.1.1.1.0  Hikvision IP Camera DS-2CD2143G0-I, V5.6.3
+  1.3.6.1.2.1.1.3.0  98765432
+  1.3.6.1.2.1.1.5.0  Reception Entrance
+```
+
+That is the ground truth for your firmware — more reliable than a MIB, which
+only describes what *might* be present. Walk the vendor's private tree with
+`--walk 1.3.6.1.4.1`.
+
+First enable SNMP on the camera: **Configuration → Network → Advanced Settings
+→ SNMP**, set v2c and a community string, and change it from `public`.
+
+### Switching it on
+
+```yaml
+snmp:
+  enabled: true
+  version: "2c"
+  community: "your-community-string"
+  oids:
+    uptime: "1.3.6.1.2.1.1.3.0"
+    description: "1.3.6.1.2.1.1.1.0"
+```
+
+Two things it then does:
+
+**A second opinion on reachability.** If a camera's web and video ports stop
+answering but it still replies to SNMP, it is reported as online with a note
+saying so. That distinguishes "the camera's web service has crashed" from
+"the camera is off the network" — a useful difference when someone has to go
+and look at it. Turn it off with `use_for_reachability: false`.
+
+**SD card state, where the camera exposes it.** Only used when the vendor API
+could not answer — no credentials, or an unsupported brand. Point it at the
+right OID, found from a walk:
+
+```yaml
+snmp:
+  sd_card_oid: "1.3.6.1.4.1.xxxxx.x.x.0"
+  sd_card_ok_values: ["1", "ok", "normal"]
+```
+
+Anything not in `sd_card_ok_values` counts as a failure. Be aware that many
+camera firmwares expose only the standard MIB-II tree over SNMP and say nothing
+about storage — the walk will tell you whether yours is an exception. The
+vendor API (ISAPI for Hikvision) remains the better source where it works, and
+always takes precedence.
+
+### Reading values by hand
+
+```bash
+python3 camtool.py snmp 10.10.12.64                        # the standard system values
+python3 camtool.py snmp 10.10.12.64 --oid 1.3.6.1.2.1.1.3.0
+python3 camtool.py snmp 10.10.12.64 --walk 1.3.6.1.4.1     # the vendor's private tree
+python3 camtool.py snmp 10.10.12.64 --community secret --version 1
+```
+
+SNMP v1 and v2c are supported. v3 is not, and neither are traps — the tool
+polls rather than listening.
+
 ## Setting up alerts
 
 Alerts are sent when a camera **changes state** — goes offline, comes back, or
@@ -449,6 +527,7 @@ chat tool expects a different field name — try `message` or `content` in
 | `camtool.py list` | Print the camera inventory |
 | `camtool.py report` | Show the last results without re-checking |
 | `camtool.py identify` | Read each camera's model and firmware |
+| `camtool.py snmp <ip>` | Read SNMP values, or list every OID a camera exposes |
 | `camtool.py test-alert` | Send a test email / chat message |
 
 Useful options:
@@ -601,6 +680,7 @@ camera_monitor/
     axis.py                   SD card status via VAPIX
     sdcard.py                 picks the right vendor, auto-detects brand
     onvif.py                  ONVIF discovery
+    snmp.py                   SNMP v1/v2c client (GET, GETNEXT, walk)
   web/                        the dashboard (status API, add/remove endpoints)
 deploy/camera-monitor.service systemd unit
 tests/                        test suite with a fake camera

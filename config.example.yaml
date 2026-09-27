@@ -64,6 +64,42 @@ checks:
                              # cameras are slow to answer.
   history_retention_days: 30 # how long to keep history for uptime figures
 
+# ---------------------------------------------------------------------------
+# Optional SNMP polling.
+#
+# You do NOT need a vendor MIB file: SNMP works with numeric OIDs, and a MIB is
+# only a dictionary that gives them names. To find out what your cameras
+# actually expose, enable SNMP in the camera's web interface
+# (Configuration > Network > Advanced Settings > SNMP) and then run:
+#
+#     python3 camtool.py snmp 10.10.12.64 --walk
+#
+# That lists every OID the camera serves, with its current value. Copy the ones
+# you want into 'oids' below.
+# ---------------------------------------------------------------------------
+snmp:
+  enabled: false
+  version: "2c"           # "1" or "2c". v3 is not supported.
+  community: "public"     # change this on the cameras; "public" is the default
+  port: 161
+  timeout: 2.0
+  retries: 1
+
+  # If the camera's web and video ports do not answer but SNMP does, still
+  # count it as online. Useful for a camera whose web service has crashed.
+  use_for_reachability: true
+
+  # Extra readings, shown by 'camtool.py snmp <ip>'. Name -> numeric OID.
+  # These two are standard on every SNMP device.
+  oids:
+    uptime: "1.3.6.1.2.1.1.3.0"
+    description: "1.3.6.1.2.1.1.1.0"
+
+  # Optional: read SD card health over SNMP, used only when the vendor API
+  # could not answer. Leave empty unless a walk shows your cameras expose it.
+  sd_card_oid: ""
+  sd_card_ok_values: ["1", "ok", "normal"]
+
 database:
   file: data/monitor.db
 
