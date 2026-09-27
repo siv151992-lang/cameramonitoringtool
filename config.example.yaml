@@ -99,6 +99,11 @@ web:
   port: 8080
   refresh_seconds: 30
 
+  # Let the dashboard add and remove cameras. Set to false to keep it
+  # strictly read-only. Anyone who can open the dashboard can edit the camera
+  # list, so on a shared network set the username/password below as well.
+  allow_editing: true
+
   # Optional browser login. Leave username empty to disable.
   username: ""
   password: ""

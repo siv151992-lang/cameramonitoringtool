@@ -1,8 +1,11 @@
-"""A small read-only dashboard served from the Python standard library.
+"""The web dashboard, served from the Python standard library.
 
 Deliberately no web framework: on a monitoring box that may have no internet
 access, "pip install" is a liability.  ``http.server`` is enough for a handful
 of operators on a LAN.
+
+Reading status is always allowed.  Adding and removing cameras is guarded by
+``web.allow_editing`` so a site can keep the dashboard strictly read-only.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import hmac
 import io
 import json
 import re
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -20,7 +24,20 @@ from urllib.parse import parse_qs, urlparse
 
 from camera_monitor.config import Config
 from camera_monitor.database import Database
-from camera_monitor.health import summarise
+from camera_monitor.health import apply_results, check_camera, summarise
+from camera_monitor.inventory import (
+    KNOWN_BRANDS,
+    Camera,
+    InventoryError,
+    load_cameras,
+    save_cameras,
+)
+
+# Serialises read-modify-write of the camera CSV across request threads.
+_inventory_lock = threading.Lock()
+
+# A camera list is small; anything larger than this is not a real request.
+MAX_BODY_BYTES = 64 * 1024
 
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "dashboard.html"
 
@@ -41,7 +58,27 @@ def render_dashboard(config: Config) -> bytes:
     )
     html = html.replace("__SITE_NAME__", safe_site)
     html = html.replace("__REFRESH_SECONDS__", str(int(config.get("web.refresh_seconds", 30))))
+    editing = "true" if config.get("web.allow_editing", True) else "false"
+    html = html.replace("__ALLOW_EDITING__", editing)
     return html.encode("utf-8")
+
+
+def _port(value: Any, default: int, label: str) -> int:
+    """Validate a port from the form.
+
+    The CSV loader silently falls back to a default for a bad port, which is
+    right for a bulk file but wrong for a form: a typo should be pointed out,
+    not quietly changed.
+    """
+    if value in (None, ""):
+        return default
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be a number")
+    if not 0 < port < 65536:
+        raise ValueError(f"{label} must be between 1 and 65535")
+    return port
 
 
 def status_payload(db: Database) -> dict[str, Any]:
@@ -155,6 +192,185 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _json(self, payload: dict[str, Any], status: int = 200) -> None:
         self._send(json.dumps(payload, default=str).encode("utf-8"), "application/json", status)
 
+    # ----------------------------------------------------------- write guard
+
+    @property
+    def editing_allowed(self) -> bool:
+        return bool(self.config.get("web.allow_editing", True))
+
+    def _same_origin(self) -> bool:
+        """Reject cross-site writes.
+
+        A page on another site can make the browser POST here using the
+        operator's session.  Browsers always attach Origin to such a request,
+        so a mismatch against our own Host is a cross-site attempt.  Requests
+        with no Origin at all (curl, the CLI) are allowed through - they carry
+        no ambient authority to abuse.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = self.headers.get("Host", "")
+        return urlparse(origin).netloc == host
+
+    def _read_json(self) -> dict[str, Any]:
+        """Parse the request body, refusing anything oversized or not JSON."""
+        # Requiring JSON blocks HTML form posts, which browsers send
+        # cross-site without a preflight.
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        if content_type != "application/json":
+            raise ValueError("expected Content-Type: application/json")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError("invalid Content-Length")
+        if length <= 0:
+            raise ValueError("empty request body")
+        if length > MAX_BODY_BYTES:
+            raise ValueError("request body too large")
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"could not read JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("expected a JSON object")
+        return payload
+
+    # -------------------------------------------------------- write handlers
+
+    def _add_camera(self, payload: dict[str, Any]) -> None:
+        """Append one camera to the inventory CSV."""
+        text = lambda key: str(payload.get(key) or "").strip()
+
+        brand = text("brand").lower() or "auto"
+        if brand not in KNOWN_BRANDS:
+            self._json({"error": f"unknown brand '{brand}'"}, status=400)
+            return
+
+        try:
+            http_port = _port(payload.get("http_port"), 80, "web port")
+            rtsp_port = _port(payload.get("rtsp_port"), 554, "video port")
+        except ValueError as exc:
+            self._json({"error": str(exc)}, status=400)
+            return
+
+        try:
+            camera = Camera(
+                ip=text("ip"),
+                name=text("name"),
+                location=text("location"),
+                brand=brand,
+                http_port=http_port,
+                rtsp_port=rtsp_port,
+                username=text("username"),
+                password=str(payload.get("password") or ""),
+                enabled=payload.get("enabled", True) is not False,
+                notes=text("notes") or "added from the dashboard",
+            )
+        except InventoryError as exc:
+            self._json({"error": str(exc)}, status=400)
+            return
+
+        inventory_path = self.config.path_for("inventory.file")
+        # One writer at a time, so two operators adding at once cannot make
+        # one of the two entries disappear.
+        with _inventory_lock:
+            existing = load_cameras(inventory_path) if inventory_path.exists() else []
+            if any(item.ip == camera.ip for item in existing):
+                self._json(
+                    {"error": f"{camera.ip} is already in the camera list"}, status=409
+                )
+                return
+            existing.append(camera)
+            save_cameras(inventory_path, existing)
+
+        result: dict[str, Any] = {
+            "ok": True,
+            "camera": {"ip": camera.ip, "name": camera.name, "location": camera.location},
+        }
+
+        # Optionally probe it straight away, so the operator gets the same
+        # confirmation the CLI's --check gives.
+        if payload.get("check"):
+            outcome = check_camera(camera, self.config, True)
+            # Record it like any other check, so the new camera appears in the
+            # table immediately instead of waiting for the next monitor cycle.
+            apply_results(self.db, [outcome], self.config)
+            result["check"] = {
+                "online": outcome.online,
+                "latency_ms": outcome.latency_ms,
+                "error": outcome.error,
+                "storage_state": outcome.storage.state.value if outcome.storage_checked else None,
+                "storage_message": outcome.storage.summary if outcome.storage_checked else "",
+            }
+        else:
+            # Nothing has checked it yet, so there is no row to show. Say so
+            # rather than leaving the operator wondering where it went.
+            result["pending"] = True
+        self._json(result)
+
+    def _remove_camera(self, payload: dict[str, Any]) -> None:
+        """Delete one camera and forget its recorded status."""
+        ip = str(payload.get("ip") or "").strip()
+        if not ip:
+            self._json({"error": "no IP address given"}, status=400)
+            return
+
+        inventory_path = self.config.path_for("inventory.file")
+        with _inventory_lock:
+            if not inventory_path.exists():
+                self._json({"error": "the camera list does not exist yet"}, status=404)
+                return
+            existing = load_cameras(inventory_path)
+            remaining = [item for item in existing if item.ip != ip]
+            if len(remaining) == len(existing):
+                self._json({"error": f"{ip} is not in the camera list"}, status=404)
+                return
+            save_cameras(inventory_path, remaining)
+            # Keep the dashboard honest: a deleted camera should not linger
+            # in the table as permanently offline.
+            self.db.remove_missing(item.ip for item in remaining)
+        self._json({"ok": True, "removed": ip})
+
+    def do_POST(self) -> None:
+        if not self._authorised():
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="Camera Monitoring"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        route = urlparse(self.path).path.rstrip("/") or "/"
+        if route not in ("/api/cameras", "/api/cameras/remove"):
+            self._json({"error": "not found"}, status=404)
+            return
+
+        if not self.editing_allowed:
+            self._json(
+                {"error": "editing is disabled (set web.allow_editing: true in config.yaml)"},
+                status=403,
+            )
+            return
+        if not self._same_origin():
+            self._json({"error": "cross-site request refused"}, status=403)
+            return
+
+        try:
+            payload = self._read_json()
+        except ValueError as exc:
+            self._json({"error": str(exc)}, status=400)
+            return
+
+        try:
+            if route == "/api/cameras":
+                self._add_camera(payload)
+            else:
+                self._remove_camera(payload)
+        except (InventoryError, OSError) as exc:
+            self._json({"error": f"could not update the camera list: {exc}"}, status=500)
+        except Exception as exc:  # keep the server alive for the next request
+            self._json({"error": f"internal error: {exc}"}, status=500)
+
     # --------------------------------------------------------------- routes
 
     def do_HEAD(self) -> None:
@@ -198,6 +414,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             elif route == "/healthz":
                 self._json({"ok": True})
+            elif route == "/api/config":
+                self._json(
+                    {
+                        "allow_editing": self.editing_allowed,
+                        "brands": sorted(KNOWN_BRANDS - {"unknown"}),
+                    }
+                )
             else:
                 self._json({"error": "not found"}, status=404)
         except ValueError as exc:

@@ -131,6 +131,44 @@
   .dot.unknown { background: var(--text-muted); }
   .pill.critical { color: var(--critical); font-weight: 600; }
 
+  /* --- add-camera dialog -------------------------------------------- */
+  dialog {
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 0; max-width: 560px; width: calc(100% - 32px);
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+  dialog h2 { margin: 0; font-size: 16px; }
+  .dialog-head, .dialog-foot {
+    padding: 16px 20px; display: flex; align-items: center; gap: 10px;
+  }
+  .dialog-head { border-bottom: 1px solid var(--gridline); }
+  .dialog-foot { border-top: 1px solid var(--gridline); justify-content: flex-end; }
+  .dialog-body { padding: 16px 20px; display: grid; gap: 12px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  label .req { color: var(--critical); }
+  .field input, .field select {
+    width: 100%; background: var(--page); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit;
+  }
+  .field input:focus, .field select:focus { outline: 2px solid var(--good); outline-offset: -1px; }
+  .checkline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+  .checkline input { width: auto; }
+  button.primary {
+    background: var(--text-primary); color: var(--surface-1); border: 1px solid var(--text-primary);
+    border-radius: 6px; padding: 7px 16px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button.primary[disabled] { opacity: 0.55; cursor: default; }
+  .notice { font-size: 13px; padding: 10px 12px; border-radius: 6px; display: none; }
+  .notice.error { display: block; background: rgba(208, 59, 59, 0.12); color: var(--critical); }
+  .notice.ok { display: block; background: rgba(12, 163, 12, 0.12); color: var(--good); }
+  .row-action {
+    background: none; border: none; color: var(--text-muted);
+    font: inherit; font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  }
+  .row-action:hover { color: var(--critical); background: var(--hover); }
+
   .events li { margin-bottom: 6px; list-style: none; }
   .events ul { margin: 0; padding: 14px; }
   .events .ts { color: var(--text-muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
@@ -144,6 +182,7 @@
     <h1>__SITE_NAME__ &mdash; Camera Status</h1>
     <span class="meta" id="updated">loading&hellip;</span>
     <span class="spacer"></span>
+    <button class="ghost" id="add-btn" type="button" hidden>+ Add camera</button>
     <button class="ghost" id="refresh-btn" type="button">Refresh</button>
     <button class="ghost" id="theme-toggle" type="button">Dark / light</button>
     <a class="ghost" href="export.csv">Download CSV</a>
@@ -173,6 +212,7 @@
           <th data-sort="uptime" class="num">Uptime 24h</th>
           <th data-sort="latency" class="num">Response</th>
           <th data-sort="last_seen">Last seen</th>
+          <th id="actions-head" hidden></th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
@@ -180,12 +220,70 @@
     <div class="empty" id="empty" hidden>No cameras match this filter.</div>
   </div>
 
+  <dialog id="add-dialog">
+    <form method="dialog" id="add-form">
+      <div class="dialog-head"><h2>Add a camera</h2></div>
+      <div class="dialog-body">
+        <div id="add-notice" class="notice"></div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="f-ip">IP address <span class="req">*</span></label>
+            <input id="f-ip" name="ip" required placeholder="10.10.12.64" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="f-name">Name</label>
+            <input id="f-name" name="name" placeholder="Reception Entrance" autocomplete="off">
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="f-location">Location</label>
+            <input id="f-location" name="location" placeholder="Ground Floor Lobby" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="f-brand">Brand</label>
+            <select id="f-brand" name="brand"></select>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="f-http">Web port</label>
+            <input id="f-http" name="http_port" type="number" min="1" max="65535" placeholder="80">
+          </div>
+          <div class="field">
+            <label for="f-rtsp">Video port</label>
+            <input id="f-rtsp" name="rtsp_port" type="number" min="1" max="65535" placeholder="554">
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="f-user">Username <span class="dim">(only if different)</span></label>
+            <input id="f-user" name="username" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="f-pass">Password <span class="dim">(only if different)</span></label>
+            <input id="f-pass" name="password" type="password" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="checkline">
+          <input type="checkbox" id="f-check" checked>
+          <label for="f-check" style="margin:0">Test the connection after adding</label>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button type="button" class="ghost" id="add-cancel">Cancel</button>
+        <button type="submit" class="primary" id="add-save">Add camera</button>
+      </div>
+    </form>
+  </dialog>
+
   <h2>Recent events</h2>
   <div class="panel events"><ul id="events"><li class="dim">No events yet.</li></ul></div>
 </div>
 
 <script>
 const REFRESH_SECONDS = __REFRESH_SECONDS__;
+const ALLOW_EDITING = __ALLOW_EDITING__;
 let cameras = [];
 let filter = "all";
 let sortKey = "ip";
@@ -279,6 +377,8 @@ function renderRows() {
       <td class="num">${cam.uptime_24h === null || cam.uptime_24h === undefined ? '<span class="dim">&mdash;</span>' : cam.uptime_24h.toFixed(1) + "%"}</td>
       <td class="num">${cam.latency_ms ? cam.latency_ms.toFixed(0) + " ms" : '<span class="dim">&mdash;</span>'}</td>
       <td class="dim nowrap">${fmtTime(cam.last_online_at)}</td>
+      ${ALLOW_EDITING ? `<td class="nowrap"><button class="row-action" data-remove="${escapeHtml(cam.ip)}"
+           title="Remove this camera from the list">Remove</button></td>` : ""}
     </tr>`).join("");
 
   document.getElementById("empty").hidden = list.length > 0;
@@ -346,6 +446,121 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
   const dark = document.documentElement.getAttribute("data-theme") === "dark";
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
 });
+
+// --- adding and removing cameras ----------------------------------------
+
+async function postJson(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await response.json(); } catch (err) { /* keep the status below */ }
+  if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+  return data;
+}
+
+const dialog = document.getElementById("add-dialog");
+const notice = document.getElementById("add-notice");
+
+function setNotice(text, kind) {
+  notice.textContent = text;
+  notice.className = text ? ("notice " + kind) : "notice";
+}
+
+if (ALLOW_EDITING) {
+  document.getElementById("add-btn").hidden = false;
+  document.getElementById("actions-head").hidden = false;
+
+  // Populate the brand list from the server so the two never drift apart.
+  fetch("api/config", { cache: "no-store" })
+    .then((r) => r.json())
+    .then((cfg) => {
+      document.getElementById("f-brand").innerHTML = (cfg.brands || ["auto"])
+        .map((b) => `<option value="${b}">${b === "auto" ? "auto (detect for me)" : b}</option>`)
+        .join("");
+    })
+    .catch(() => {});
+
+  document.getElementById("add-btn").addEventListener("click", () => {
+    document.getElementById("add-form").reset();
+    document.getElementById("f-check").checked = true;
+    setNotice("", "");
+    dialog.showModal();
+    document.getElementById("f-ip").focus();
+  });
+
+  document.getElementById("add-cancel").addEventListener("click", () => dialog.close());
+
+  // Clear a previous error as soon as the operator starts changing the form,
+  // so a stale message cannot be mistaken for the current one - the browser's
+  // own field validation can block submit without our handler ever running.
+  document.getElementById("add-form").addEventListener("input", () => setNotice("", ""));
+
+  document.getElementById("add-form").addEventListener("submit", async (event) => {
+    event.preventDefault();   // we submit over fetch, not as a form post
+    const save = document.getElementById("add-save");
+    const value = (id) => document.getElementById(id).value.trim();
+
+    const body = {
+      ip: value("f-ip"),
+      name: value("f-name"),
+      location: value("f-location"),
+      brand: value("f-brand") || "auto",
+      http_port: value("f-http"),
+      rtsp_port: value("f-rtsp"),
+      username: value("f-user"),
+      password: document.getElementById("f-pass").value,
+      check: document.getElementById("f-check").checked,
+    };
+
+    save.disabled = true;
+    save.textContent = body.check ? "Adding and testing\u2026" : "Adding\u2026";
+    setNotice("", "");
+    try {
+      const result = await postJson("api/cameras", body);
+      let message = `Added ${result.camera.ip}.`;
+      if (result.check) {
+        message += result.check.online
+          ? ` It is online${result.check.storage_state ? ", SD card: " + result.check.storage_state : ""}.`
+          : ` It did not respond: ${result.check.error || "no answer"}.`;
+      } else if (result.pending) {
+        message += " It will appear in the table after the next check.";
+      }
+      setNotice(message, result.check && !result.check.online ? "error" : "ok");
+      await refresh();
+      // Keep the dialog open on a failed test so the message can be read and
+      // the next camera typed in; close it when everything went well.
+      if (!result.check || result.check.online) {
+        setTimeout(() => dialog.close(), 900);
+      } else {
+        document.getElementById("f-ip").value = "";
+      }
+    } catch (err) {
+      setNotice(err.message, "error");
+    } finally {
+      save.disabled = false;
+      save.textContent = "Add camera";
+    }
+  });
+
+  // Row "Remove" buttons are created on every render, so listen on the table.
+  document.getElementById("rows").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-remove]");
+    if (!button) return;
+    const ip = button.dataset.remove;
+    if (!confirm(`Remove ${ip} from the camera list?\n\nIts recorded history stays, but it will no longer be checked.`)) return;
+    button.disabled = true;
+    try {
+      await postJson("api/cameras/remove", { ip });
+      await refresh();
+    } catch (err) {
+      alert("Could not remove " + ip + ": " + err.message);
+      button.disabled = false;
+    }
+  });
+}
 
 document.getElementById("refresh-btn").addEventListener("click", async (event) => {
   const button = event.currentTarget;

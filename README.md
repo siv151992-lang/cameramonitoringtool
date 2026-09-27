@@ -179,6 +179,32 @@ optionally with a name and location:
 python3 camtool.py add --from-file camera-ips.txt
 ```
 
+### Adding cameras from the dashboard
+
+The dashboard has an **+ Add camera** button that does the same thing without
+the command line. Fill in the address, optionally a name and location, and
+leave *Test the connection after adding* ticked — the camera is probed straight
+away and the result is reported in the dialog, so a wrong address or password
+is obvious immediately.
+
+Each row also gets a **Remove** link.
+
+This is on by default. To keep the dashboard strictly read-only, set:
+
+```yaml
+web:
+  allow_editing: false
+```
+
+**Anyone who can open the dashboard can edit the camera list.** On a shared
+network, either turn editing off or set a dashboard login:
+
+```yaml
+web:
+  username: "operator"
+  password: "${DASHBOARD_PASSWORD}"
+```
+
 **Removing cameras:**
 
 ```bash
@@ -524,7 +550,11 @@ brief blips are ignored.
   to `config.yaml`, the database, or the log.
 - Use a **read-only operator account** on the cameras. The tool only ever reads;
   it never changes camera settings.
-- The dashboard is **read-only** and has no way to alter cameras or the database.
+- The dashboard can add and remove cameras (`web.allow_editing`, on by
+  default). It cannot change camera settings or edit recorded history. Set
+  `allow_editing: false` for a strictly read-only dashboard.
+- Writes are refused unless the request comes from the dashboard's own page, so
+  another website cannot alter your camera list through your browser.
 - The dashboard has no login unless you set one. On a trusted LAN that is
   usually fine; to require a login, set `web.username` and `web.password` in
   `config.yaml`.
@@ -559,7 +589,7 @@ camera_monitor/
     axis.py                   SD card status via VAPIX
     sdcard.py                 picks the right vendor, auto-detects brand
     onvif.py                  ONVIF discovery
-  web/                        the dashboard
+  web/                        the dashboard (status API, add/remove endpoints)
 deploy/camera-monitor.service systemd unit
 tests/                        test suite with a fake camera
 ```

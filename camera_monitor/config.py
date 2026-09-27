@@ -81,6 +81,8 @@ DEFAULTS: dict[str, Any] = {
         "refresh_seconds": 30,
         "username": "",
         "password": "",
+        # Whether the dashboard may add and remove cameras.
+        "allow_editing": True,
     },
 }
 
