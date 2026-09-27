@@ -134,6 +134,61 @@ python3 camtool.py discover --dry-run
 python3 camtool.py discover --subnet 192.168.3.0/24    # scan one range only
 ```
 
+### Adding cameras by hand
+
+Discovery is convenient, not compulsory. If the server cannot sweep the camera
+network, or you already have a list of addresses from your NVR, add them
+directly:
+
+```bash
+python3 camtool.py add 10.10.12.64 --name "Reception Entrance" --location "Ground Floor Lobby"
+```
+
+Add `--check` to test it on the spot, which is the quickest way to confirm an
+address, port and password before adding hundreds more:
+
+```bash
+python3 camtool.py add 10.10.12.64 --name "Reception" --check
+```
+
+```
+Added 1, updated 0. cameras.csv now holds 1 camera(s).
+
+Checking 1 camera(s) ...
+  IP address   Name       Status  SD card  Detail
+  -----------  ---------  ------  -------  -------------------------------
+  10.10.12.64  Reception  online  ok       22104 MB free of 30436 MB
+```
+
+Other options: `--brand`, `--http-port`, `--rtsp-port`, `--username`,
+`--password`, `--notes`, and `--disabled` to add a camera that is not installed
+yet. An address that is already in the list is left alone unless you pass
+`--update`.
+
+**Adding many at once.** Put the addresses in a plain text file, one per line,
+optionally with a name and location:
+
+```
+# exported from the NVR
+10.10.12.64,Reception Entrance,Ground Floor
+10.10.12.65,Parking Ramp,Basement
+10.10.12.66
+```
+
+```bash
+python3 camtool.py add --from-file camera-ips.txt
+```
+
+**Removing cameras:**
+
+```bash
+python3 camtool.py remove 10.10.12.64
+python3 camtool.py remove 10.10.12.64 10.10.12.65     # several at once
+```
+
+Removing also clears that camera's recorded status, so it disappears from the
+dashboard rather than lingering as permanently offline.
+
 ### Step 3 — Name your cameras
 
 Open `cameras.csv` in Excel, LibreOffice or a text editor. It looks like this:
@@ -347,6 +402,8 @@ chat tool expects a different field name — try `message` or `content` in
 | Command | What it does |
 |---|---|
 | `camtool.py discover` | Find cameras and add them to `cameras.csv` |
+| `camtool.py add <ip>` | Add a camera by hand, without discovery |
+| `camtool.py remove <ip>` | Remove cameras from the list |
 | `camtool.py scan` | Check every camera once and report |
 | `camtool.py monitor` | Check on a loop and send alerts |
 | `camtool.py monitor --serve` | The same, plus the web dashboard |
@@ -359,6 +416,8 @@ chat tool expects a different field name — try `message` or `content` in
 Useful options:
 
 ```bash
+python3 camtool.py add 10.10.12.64 --check     # add one camera and test it immediately
+python3 camtool.py add --from-file ips.txt     # bulk add from a list of addresses
 python3 camtool.py scan --all                  # list every camera, not just problems
 python3 camtool.py scan --no-storage           # reachability only, much faster
 python3 camtool.py report --offline-only
@@ -420,14 +479,17 @@ you cannot regenerate by hand once names and locations are filled in.
 ## Troubleshooting
 
 **"Camera list not found"**
-Run `python3 camtool.py discover` first, or copy `cameras.example.csv` to
-`cameras.csv` and edit it.
+Run `python3 camtool.py discover` first, or add a camera by hand with
+`python3 camtool.py add <ip>`, or copy `cameras.example.csv` to `cameras.csv`
+and edit it.
 
 **`discover` finds nothing**
 - Check the subnet is right: run `ip addr` (Linux) or `ipconfig` (Windows) and
   confirm the server is on the same range you configured.
 - Cameras on a different VLAN will not answer unless routing allows it.
 - Try one known camera directly: `python3 camtool.py discover --subnet 192.168.1.64`
+- If the sweep cannot reach them at all, add them by hand instead:
+  `python3 camtool.py add 192.168.1.64 --check`
 
 **Every camera shows SD card "Unknown"**
 Almost always credentials. Check that:

@@ -23,6 +23,7 @@ from camera_monitor.config import Config, ConfigError, load_config
 from camera_monitor.database import Database
 from camera_monitor.health import apply_results, run_checks, summarise
 from camera_monitor.inventory import (
+    KNOWN_BRANDS,
     Camera,
     InventoryError,
     load_cameras,
@@ -314,6 +315,161 @@ def cmd_serve(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _read_ip_list(path: str) -> list[dict[str, str]]:
+    """Read a plain list of cameras for bulk adding.
+
+    One camera per line: ``ip``, ``ip,name`` or ``ip,name,location``.
+    Blank lines and lines starting with # are ignored, so a list exported
+    from an NVR can usually be used as-is.
+    """
+    text = Path(path).read_text(encoding="utf-8-sig")
+    entries: list[dict[str, str]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        entries.append(
+            {
+                "ip": parts[0],
+                "name": parts[1] if len(parts) > 1 else "",
+                "location": parts[2] if len(parts) > 2 else "",
+            }
+        )
+    return entries
+
+
+def cmd_add(args: argparse.Namespace, config: Config) -> int:
+    """Add cameras to the list by hand, without running discovery."""
+    inventory_path = config.path_for("inventory.file")
+    existing = load_cameras(inventory_path) if inventory_path.exists() else []
+    by_ip = {camera.ip: camera for camera in existing}
+
+    # Name and location come from the file when bulk adding, and from the
+    # command line for a single camera. Everything else applies to all of them.
+    requested: list[dict[str, str]] = []
+    if args.from_file:
+        try:
+            requested.extend(_read_ip_list(args.from_file))
+        except OSError as exc:
+            print(f"Could not read {args.from_file}: {exc}")
+            return 1
+    if args.ip:
+        requested.append(
+            {"ip": args.ip, "name": args.name or "", "location": args.location or ""}
+        )
+    if not requested:
+        print(
+            "Nothing to add.\n"
+            "  python3 camtool.py add 10.10.12.64 --name 'Reception' --location 'Lobby'\n"
+            "  python3 camtool.py add --from-file camera-ips.txt"
+        )
+        return 1
+
+    added: list[Camera] = []
+    updated: list[Camera] = []
+    skipped: list[str] = []
+    invalid: list[str] = []
+
+    for entry in requested:
+        try:
+            camera = Camera(
+                ip=entry["ip"],
+                name=entry.get("name", ""),
+                location=entry.get("location", ""),
+                brand=args.brand or "auto",
+                http_port=args.http_port or 80,
+                rtsp_port=args.rtsp_port or 554,
+                username=args.username or "",
+                password=args.password or "",
+                enabled=not args.disabled,
+                notes=args.notes or "added manually",
+            )
+        except InventoryError as exc:
+            invalid.append(f"{entry['ip']}: {exc}")
+            continue
+
+        if camera.ip in by_ip:
+            if not args.update:
+                skipped.append(camera.ip)
+                continue
+            updated.append(camera)
+        else:
+            added.append(camera)
+        by_ip[camera.ip] = camera
+
+    for problem in invalid:
+        print(f"  ! skipped {problem}")
+    if skipped:
+        print(
+            f"  ! {len(skipped)} already in the list, left untouched "
+            f"({', '.join(skipped[:5])}{', ...' if len(skipped) > 5 else ''})."
+        )
+        print("    Use --update to overwrite them.")
+
+    if added or updated:
+        save_cameras(inventory_path, list(by_ip.values()))
+        print(
+            f"Added {len(added)}, updated {len(updated)}. "
+            f"{inventory_path} now holds {len(by_ip)} camera(s)."
+        )
+    else:
+        print("No changes made.")
+        return 1 if invalid else 0
+
+    if args.check:
+        targets = [camera for camera in added + updated if camera.enabled]
+        if not targets:
+            print("\nNothing to check (the camera was added as disabled).")
+            return 0
+        print(f"\nChecking {len(targets)} camera(s) ...")
+        results = run_checks(targets, config, with_storage=True)
+        print_table(
+            [
+                [
+                    result.camera.ip,
+                    result.camera.name[:24],
+                    "online" if result.online else "OFFLINE",
+                    result.storage.state.value if result.storage_checked else "-",
+                    (result.storage.summary if result.storage_checked else result.error)[:46],
+                ]
+                for result in results
+            ],
+            ["IP address", "Name", "Status", "SD card", "Detail"],
+        )
+        if any(not result.online for result in results):
+            print(
+                "\nA camera reported offline here is not reachable from this machine.\n"
+                "Check the IP and web port, and that this server is on the same network."
+            )
+    return 0
+
+
+def cmd_remove(args: argparse.Namespace, config: Config) -> int:
+    """Remove cameras from the list, and drop their recorded status."""
+    inventory_path = config.path_for("inventory.file")
+    cameras = load_cameras(inventory_path)
+    targets = set(args.ip)
+
+    remaining = [camera for camera in cameras if camera.ip not in targets]
+    removed = [camera for camera in cameras if camera.ip in targets]
+    missing = targets - {camera.ip for camera in cameras}
+
+    for ip in sorted(missing):
+        print(f"  ! {ip} is not in the camera list")
+    if not removed:
+        return 1
+
+    save_cameras(inventory_path, remaining)
+    for camera in removed:
+        print(f"  removed {camera.ip}  {camera.name}")
+    # Keep the dashboard in step: drop the status rows for deleted cameras.
+    with open_database(config) as db:
+        db.remove_missing(camera.ip for camera in remaining)
+    print(f"\n{len(removed)} removed. {inventory_path} now holds {len(remaining)} camera(s).")
+    return 0
+
+
 def cmd_list(args: argparse.Namespace, config: Config) -> int:
     """Print the inventory."""
     cameras = read_inventory(config)
@@ -503,6 +659,41 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, help="override the configured port")
     serve.add_argument("--verbose", action="store_true", help="log every HTTP request")
     serve.set_defaults(func=cmd_serve)
+
+    add = sub.add_parser(
+        "add",
+        help="add a camera to the list by hand",
+        description="Add cameras without running discovery - useful when the cameras "
+                    "are on a network the server cannot sweep, or when you already "
+                    "have a list of addresses.",
+        epilog="Examples:\n"
+               "  python3 camtool.py add 10.10.12.64 --name 'Reception' --location 'Lobby'\n"
+               "  python3 camtool.py add 10.10.12.64 --check\n"
+               "  python3 camtool.py add --from-file camera-ips.txt\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    add.add_argument("ip", nargs="?", help="the camera's IP address")
+    add.add_argument("--name", "-n", help="friendly name, e.g. 'Reception Entrance'")
+    add.add_argument("--location", "-l", help="floor, block or room")
+    add.add_argument("--brand", choices=sorted(KNOWN_BRANDS), help="default: auto-detect")
+    add.add_argument("--http-port", type=int, help="web port (default 80)")
+    add.add_argument("--rtsp-port", type=int, help="video port (default 554)")
+    add.add_argument("--username", help="only if this camera differs from the config default")
+    add.add_argument("--password", help="as above; prefer the config file to keep it out of shell history")
+    add.add_argument("--notes", help="free text")
+    add.add_argument("--disabled", action="store_true", help="add it but do not check it yet")
+    add.add_argument("--update", action="store_true", help="overwrite an entry that already exists")
+    add.add_argument(
+        "--from-file",
+        metavar="FILE",
+        help="bulk add from a text file: one 'ip', 'ip,name' or 'ip,name,location' per line",
+    )
+    add.add_argument("--check", action="store_true", help="check the camera right after adding it")
+    add.set_defaults(func=cmd_add)
+
+    remove = sub.add_parser("remove", help="remove cameras from the list")
+    remove.add_argument("ip", nargs="+", help="one or more IP addresses")
+    remove.set_defaults(func=cmd_remove)
 
     listing = sub.add_parser("list", help="print the camera inventory")
     listing.set_defaults(func=cmd_list)
