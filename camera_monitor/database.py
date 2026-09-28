@@ -261,9 +261,7 @@ class Database:
             self._conn.commit()
 
 
-def _ip_sort_key(record: dict[str, Any]) -> tuple:
-    ip = record.get("ip", "")
-    try:
-        return tuple(int(part) for part in ip.split("."))
-    except ValueError:
-        return (0, 0, 0, 0)
+def _ip_sort_key(record: dict[str, Any]) -> tuple[int, int]:
+    from camera_monitor.inventory import ip_sort_key
+
+    return ip_sort_key(str(record.get("ip", "")))

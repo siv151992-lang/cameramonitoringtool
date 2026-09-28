@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from camera_monitor.inventory import Camera
+from camera_monitor.inventory import Camera, ip_sort_key
 from camera_monitor.probes import onvif
 from camera_monitor.probes.reachability import tcp_probe
 
@@ -121,7 +121,7 @@ def scan_subnets(
             if progress and (done % 50 == 0 or done == total):
                 progress(done, total)
 
-    results.sort(key=lambda host: tuple(int(part) for part in host.ip.split(".")))
+    results.sort(key=lambda host: ip_sort_key(host.ip))
     return results
 
 
@@ -154,13 +154,7 @@ def discover_all(
         else:
             hosts[host.ip] = host
 
-    ordered = sorted(
-        hosts.values(),
-        key=lambda host: tuple(int(part) for part in host.ip.split("."))
-        if ":" not in host.ip
-        else (0,),
-    )
-    return ordered
+    return sorted(hosts.values(), key=lambda host: ip_sort_key(host.ip))
 
 
 def to_cameras(hosts: list[DiscoveredHost]) -> list[Camera]:

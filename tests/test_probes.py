@@ -141,3 +141,49 @@ class ReachabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OnvifAddressChoiceTests(unittest.TestCase):
+    """A camera often advertises both an IPv4 and an IPv6 service address.
+
+    Picking the IPv6 one lists the camera under an address nothing else on the
+    LAN uses, so the port sweep finds the same device again under its IPv4
+    address and the inventory ends up with two rows for one camera.
+    """
+
+    @staticmethod
+    def reply(xaddrs: str) -> str:
+        return f"""<?xml version="1.0"?>
+        <e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+                    xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery">
+          <e:Body><d:ProbeMatches><d:ProbeMatch>
+            <d:XAddrs>{xaddrs}</d:XAddrs>
+          </d:ProbeMatch></d:ProbeMatches></e:Body>
+        </e:Envelope>"""
+
+    def test_ipv4_is_preferred_even_when_listed_second(self):
+        match = _parse_probe_match(
+            self.reply("http://[fe80::1]/onvif/device_service"
+                       " http://192.168.1.64/onvif/device_service"),
+            "192.168.1.99",
+        )
+        self.assertEqual(match["ip"], "192.168.1.64")
+        self.assertIn("192.168.1.64", match["xaddr"])
+
+    def test_the_sender_is_used_when_only_ipv6_is_advertised(self):
+        # An fe80:: address cannot be connected to without a scope id, so the
+        # address the datagram actually came from is more useful.
+        match = _parse_probe_match(
+            self.reply("http://[fe80::1]/onvif/device_service"), "192.168.1.99"
+        )
+        self.assertEqual(match["ip"], "192.168.1.99")
+
+    def test_a_single_ipv4_address_is_used_as_is(self):
+        match = _parse_probe_match(
+            self.reply("http://192.168.1.64/onvif/device_service"), "192.168.1.99"
+        )
+        self.assertEqual(match["ip"], "192.168.1.64")
+
+    def test_no_addresses_falls_back_to_the_sender(self):
+        match = _parse_probe_match(self.reply(""), "192.168.1.99")
+        self.assertEqual(match["ip"], "192.168.1.99")

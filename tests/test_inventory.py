@@ -103,3 +103,49 @@ class MergeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MixedAddressFamilyTests(unittest.TestCase):
+    """IPv4 and IPv6 in one list must sort, not raise.
+
+    Regression: sort_key returned a tuple of ints for IPv4 but a 1-tuple
+    holding a string for IPv6, so any list containing both blew up with
+    "'<' not supported between instances of 'str' and 'int'". A real scan hit
+    this the moment ONVIF reported one IPv6 address.
+    """
+
+    def test_sort_keys_are_always_comparable(self):
+        for ip in ("192.168.1.64", "10.0.0.1", "fe80::1", "2001:db8::1"):
+            key = Camera(ip=ip).sort_key
+            self.assertTrue(all(isinstance(part, int) for part in key), f"{ip} -> {key}")
+
+    def test_a_mixed_list_sorts_without_raising(self):
+        cameras = [
+            Camera(ip="192.168.1.64"), Camera(ip="fe80::1"),
+            Camera(ip="192.168.1.9"), Camera(ip="10.0.0.1"),
+        ]
+        ordered = sorted(cameras, key=lambda camera: camera.sort_key)
+        self.assertEqual(
+            [camera.ip for camera in ordered],
+            ["10.0.0.1", "192.168.1.9", "192.168.1.64", "fe80::1"],
+        )
+
+    def test_merge_discovered_handles_a_mixed_batch(self):
+        merged, added = merge_discovered(
+            [Camera(ip="192.168.1.9")],
+            [Camera(ip="fe80::1"), Camera(ip="192.168.1.64")],
+        )
+        self.assertEqual(len(merged), 3)
+        self.assertEqual(len(added), 2)
+
+    def test_ipv6_survives_a_csv_round_trip(self):
+        directory = tempfile.TemporaryDirectory()
+        path = Path(directory.name) / "cameras.csv"
+        save_cameras(path, [Camera(ip="fe80::1", name="Odd One"), Camera(ip="192.168.1.9")])
+        loaded = load_cameras(path)
+        self.assertEqual([camera.ip for camera in loaded], ["192.168.1.9", "fe80::1"])
+        directory.cleanup()
+
+    def test_ipv6_default_name_has_no_colons(self):
+        # Colons in a generated name make a mess of CSVs and alert text.
+        self.assertNotIn(":", Camera(ip="fe80::1234").name)

@@ -33,6 +33,23 @@ class InventoryError(Exception):
     """Raised when the camera CSV cannot be read."""
 
 
+def ip_sort_key(ip: str) -> tuple[int, int]:
+    """Order IP addresses numerically, mixing IPv4 and IPv6 safely.
+
+    Returns (version, numeric value), so every key is a pair of ints. Sorting
+    on per-part tuples looks simpler but breaks the moment one IPv6 address
+    turns up beside IPv4 ones - ONVIF discovery readily produces that mix, and
+    comparing an int against a str raises TypeError.
+    """
+    try:
+        address = ipaddress.ip_address(ip.strip())
+    except ValueError:
+        # Should not happen (Camera validates on construction), but a sort must
+        # never be the thing that crashes a scan.
+        return (0, 0)
+    return (address.version, int(address))
+
+
 def _to_int(value: str | int | None, default: int) -> int:
     try:
         parsed = int(str(value).strip())
@@ -70,7 +87,8 @@ class Camera:
             ipaddress.ip_address(self.ip)
         except ValueError as exc:
             raise InventoryError(f"'{self.ip}' is not a valid IP address") from exc
-        self.name = (self.name or "").strip() or f"camera-{self.ip.replace('.', '-')}"
+        slug = self.ip.replace(".", "-").replace(":", "-")
+        self.name = (self.name or "").strip() or f"camera-{slug}"
         self.location = (self.location or "").strip()
         self.brand = (self.brand or "auto").strip().lower()
         if self.brand not in KNOWN_BRANDS:
@@ -80,9 +98,9 @@ class Camera:
         self.enabled = _to_bool(self.enabled, True)
 
     @property
-    def sort_key(self) -> tuple:
+    def sort_key(self) -> tuple[int, int]:
         """Sort by IP numerically rather than as text, so .2 precedes .10."""
-        return tuple(int(part) for part in self.ip.split(".")) if ":" not in self.ip else (self.ip,)
+        return ip_sort_key(self.ip)
 
     def to_row(self) -> dict[str, str]:
         row = asdict(self)

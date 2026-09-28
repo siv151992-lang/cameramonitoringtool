@@ -119,15 +119,35 @@ def _parse_probe_match(payload: str, sender_ip: str) -> dict[str, str] | None:
         elif name == "Scopes" and text:
             scopes = text
 
-    # Prefer the address the camera advertises; fall back to the UDP sender.
-    ip = sender_ip
-    first_xaddr = xaddrs.split()[0] if xaddrs else ""
-    if first_xaddr:
-        host = urlparse(first_xaddr).hostname
-        if host:
-            ip = host
+    # A camera often advertises several service addresses - commonly an IPv4
+    # one and an IPv6 link-local one. Prefer IPv4: it is what the rest of the
+    # LAN uses, an fe80:: address is not reachable without a scope id anyway,
+    # and picking per-camera consistently stops the same device being listed
+    # twice when the port sweep also finds it.
+    candidates = [urlparse(addr).hostname for addr in xaddrs.split()]
+    candidates = [host for host in candidates if host]
 
-    return {"ip": ip, "xaddr": first_xaddr, "types": types, "scopes": scopes}
+    chosen = ""
+    for host in candidates:
+        if _is_ipv4(host):
+            chosen = host
+            break
+    if not chosen:
+        chosen = sender_ip if _is_ipv4(sender_ip) else (candidates[0] if candidates else sender_ip)
+
+    matching_xaddr = next(
+        (addr for addr in xaddrs.split() if urlparse(addr).hostname == chosen), ""
+    )
+    return {"ip": chosen, "xaddr": matching_xaddr, "types": types, "scopes": scopes}
+
+
+def _is_ipv4(host: str) -> bool:
+    import ipaddress
+
+    try:
+        return ipaddress.ip_address(host).version == 4
+    except ValueError:
+        return False
 
 
 def name_from_scopes(scopes: str) -> str:
