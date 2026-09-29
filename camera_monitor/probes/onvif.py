@@ -7,9 +7,13 @@ needs no credentials.
 
 from __future__ import annotations
 
+import ipaddress
 import socket
+import struct
+import sys
 import time
 import uuid
+from typing import Iterable
 from urllib.parse import urlparse
 
 from camera_monitor.probes import xmlutil
@@ -33,37 +37,106 @@ PROBE_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 </e:Envelope>"""
 
 
-def _local_addresses() -> list[str]:
+def _source_address_for(target: str) -> str | None:
+    """Which of our addresses the OS would use to reach this target.
+
+    Connecting a UDP socket sends nothing; it just asks the routing table.
+    This is the reliable way to find the right interface for a given network.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect((target, MULTICAST_PORT))
+            return probe.getsockname()[0]
+    except OSError:
+        return None
+
+
+def _interface_addresses() -> list[str]:
+    """Every IPv4 address on this machine's interfaces (Linux only).
+
+    Needed because a camera server is often multi-homed - one NIC per VLAN -
+    and the probe must go out of each of them.
+    """
+    if sys.platform != "linux":
+        return []
+    try:
+        import fcntl
+    except ImportError:
+        return []
+
+    SIOCGIFADDR = 0x8915
+    found: list[str] = []
+    for _, name in socket.if_nameindex():
+        if name == "lo":
+            continue
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                request = struct.pack("256s", name.encode("utf-8")[:15])
+                reply = fcntl.ioctl(sock.fileno(), SIOCGIFADDR, request)
+                found.append(socket.inet_ntoa(reply[20:24]))
+        except (OSError, ValueError):
+            continue          # interface has no IPv4 address, or is down
+    return found
+
+
+def _local_addresses(subnets: Iterable[str] | None = None) -> list[str]:
     """Best-effort list of this server's own IPv4 addresses.
 
     A server with one NIC per VLAN must send the probe from each of them, or
-    cameras on the other VLANs never see it.
+    cameras on the other VLANs never see it.  Three sources, because no single
+    one is reliable everywhere:
+
+    1. The interface list, where the platform allows reading it.
+    2. The address the OS would use to reach each configured subnet - this is
+       what catches the camera VLAN when it is not the default route.
+    3. The default route, and the hostname, as a last resort.  On Debian and
+       Ubuntu the hostname usually resolves to loopback only, which is why it
+       cannot be relied on alone.
     """
-    addresses: set[str] = set()
+    addresses: set[str] = set(_interface_addresses())
+
+    for entry in subnets or []:
+        try:
+            text = str(entry).strip()
+            if "/" in text:
+                target = str(next(ipaddress.ip_network(text, strict=False).hosts()))
+            elif "-" in text:
+                target = text.split("-")[0].strip()
+            else:
+                target = text
+        except (ValueError, StopIteration):
+            continue
+        source = _source_address_for(target)
+        if source:
+            addresses.add(source)
+
+    default_route = _source_address_for("8.8.8.8")
+    if default_route:
+        addresses.add(default_route)
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             addresses.add(info[4][0])
     except socket.gaierror:
         pass
-    try:
-        # Reveals the address used for the default route without sending traffic.
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.connect(("8.8.8.8", 80))
-            addresses.add(probe.getsockname()[0])
-    except OSError:
-        pass
-    addresses.discard("127.0.0.1")
+
+    addresses = {address for address in addresses if not address.startswith("127.")}
     return sorted(addresses) or ["0.0.0.0"]
 
 
-def discover(timeout: float = 4.0) -> list[dict[str, str]]:
+def discover(
+    timeout: float = 4.0, subnets: Iterable[str] | None = None
+) -> list[dict[str, str]]:
     """Send an ONVIF Probe and collect the replies.
+
+    ``subnets`` are the networks being scanned; they are used to work out which
+    of this machine's interfaces faces each one, so a multi-homed server probes
+    the camera VLAN and not only its default route.
 
     Returns one entry per camera: ``{ip, xaddr, types, scopes}``.
     """
     found: dict[str, dict[str, str]] = {}
 
-    for source in _local_addresses():
+    for source in _local_addresses(subnets):
         message = PROBE_TEMPLATE.format(message_id=uuid.uuid4()).encode("utf-8")
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

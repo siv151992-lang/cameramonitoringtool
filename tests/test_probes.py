@@ -4,7 +4,13 @@ import unittest
 
 from camera_monitor.probes import dahua, hikvision, sdcard
 from camera_monitor.probes.base import StorageState
-from camera_monitor.probes.onvif import _parse_probe_match, name_from_scopes
+from camera_monitor.probes.onvif import (
+    _interface_addresses,
+    _local_addresses,
+    _parse_probe_match,
+    _source_address_for,
+    name_from_scopes,
+)
 from camera_monitor.probes.reachability import check_reachable
 from tests.fake_camera import FakeCamera
 
@@ -187,3 +193,51 @@ class OnvifAddressChoiceTests(unittest.TestCase):
     def test_no_addresses_falls_back_to_the_sender(self):
         match = _parse_probe_match(self.reply(""), "192.168.1.99")
         self.assertEqual(match["ip"], "192.168.1.99")
+
+
+class OnvifInterfaceSelectionTests(unittest.TestCase):
+    """The probe has to leave by every interface, not just the default route.
+
+    A camera server is usually multi-homed - one NIC per VLAN - and on Debian
+    and Ubuntu the hostname resolves to loopback only, so the original
+    hostname lookup found nothing and the probe went out of one interface.
+    """
+
+    def test_never_returns_an_empty_list(self):
+        # An empty list would silently skip discovery altogether.
+        self.assertTrue(_local_addresses())
+
+    def test_loopback_is_excluded(self):
+        # Probing 127.0.0.1 reaches nothing and wastes the timeout.
+        for address in _local_addresses():
+            self.assertFalse(address.startswith("127."), address)
+
+    def test_every_address_is_a_valid_ipv4(self):
+        import ipaddress
+
+        for address in _local_addresses():
+            ipaddress.ip_address(address)     # raises if malformed
+
+    def test_interface_enumeration_returns_usable_addresses(self):
+        import ipaddress
+        import sys
+
+        addresses = _interface_addresses()
+        if sys.platform != "linux":
+            self.assertEqual(addresses, [])
+            return
+        for address in addresses:
+            ipaddress.ip_address(address)
+            self.assertFalse(address.startswith("127."), address)
+
+    def test_subnet_hints_are_accepted_in_every_form(self):
+        # CIDR, single address and range, matching the discovery config.
+        for hint in ("10.10.12.0/24", "10.10.12.64", "10.10.12.1-10.10.12.99"):
+            self.assertTrue(_local_addresses([hint]), hint)
+
+    def test_malformed_hints_do_not_break_discovery(self):
+        # A typo in config.yaml must not stop the probe going out.
+        self.assertTrue(_local_addresses(["nonsense", "", "10.10.12.0/99", None]))
+
+    def test_source_lookup_sends_nothing_and_survives_bad_input(self):
+        self.assertIsNone(_source_address_for("not-an-address"))

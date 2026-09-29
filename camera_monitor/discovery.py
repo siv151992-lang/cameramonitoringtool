@@ -138,7 +138,7 @@ def discover_all(
     hosts: dict[str, DiscoveredHost] = {}
 
     if use_onvif:
-        for match in onvif.discover(timeout=onvif_timeout):
+        for match in onvif.discover(timeout=onvif_timeout, subnets=subnets):
             hosts[match["ip"]] = DiscoveredHost(
                 ip=match["ip"],
                 open_ports=[],
