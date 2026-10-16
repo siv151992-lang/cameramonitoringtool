@@ -2,7 +2,7 @@
 
 import unittest
 
-from camera_monitor.probes import dahua, hikvision, sdcard
+from camera_monitor.probes import dahua, hikvision, sdcard, xmlutil
 from camera_monitor.probes.base import StorageState
 from camera_monitor.probes.onvif import (
     _interface_addresses,
@@ -241,3 +241,65 @@ class OnvifInterfaceSelectionTests(unittest.TestCase):
 
     def test_source_lookup_sends_nothing_and_survives_bad_input(self):
         self.assertIsNone(_source_address_for("not-an-address"))
+
+
+class RealHikvisionResponseTests(unittest.TestCase):
+    """Parsed against output captured from a real device on a live site.
+
+    Two things here that a hand-written fixture would not have caught: the
+    inner hddList declares a *different* namespace (ver10) from the enclosing
+    storage element (ver20), and the response carries a nasList section that
+    must not be mistaken for a disk.
+    """
+
+    REAL_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
+<storage version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+<hddList version="1.0" xmlns="http://www.hikvision.com/ver10/XMLSchema">
+<hdd>
+<id>1</id>
+<hddName>hdde</hddName>
+<hddPath></hddPath>
+<hddType>SATA</hddType>
+<status>ok</status>
+<capacity>121942</capacity>
+<freeSpace>5632</freeSpace>
+<property>RW</property>
+<formatType>EXT4</formatType>
+</hdd>
+</hddList>
+<nasList version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+<supportMountType opt="NFS,SMB/CIFS"/>
+<authentication opt="SMB/CIFS"/>
+</nasList>
+<workMode>quota</workMode>
+</storage>"""
+
+    def test_the_disk_is_found_despite_the_mixed_namespaces(self):
+        root = xmlutil.parse(self.REAL_RESPONSE)
+        disks = list(xmlutil.find_all(root, "hdd"))
+        self.assertEqual(len(disks), 1)
+        fields = xmlutil.children_as_dict(disks[0])
+        self.assertEqual(fields["status"], "ok")
+        self.assertEqual(fields["hddName"], "hdde")
+        self.assertEqual(fields["property"], "RW")
+
+    def test_nas_configuration_is_not_counted_as_storage(self):
+        root = xmlutil.parse(self.REAL_RESPONSE)
+        self.assertEqual(len(list(xmlutil.find_all(root, "hdd"))), 1)
+
+    def test_a_healthy_sata_disk_reads_as_ok(self):
+        # Some devices record to a hard disk rather than an SD card; the
+        # status and property fields are read the same way for both.
+        state, reason = hikvision._classify("ok", read_only=False)
+        self.assertEqual(state, StorageState.OK)
+        self.assertEqual(reason, "")
+
+    def test_a_nearly_full_disk_is_not_treated_as_a_fault(self):
+        # 5632 MB free of 121942 is normal for CCTV: recording overwrites the
+        # oldest footage in a ring, so a near-full disk is the steady state and
+        # must never raise an alert.
+        root = xmlutil.parse(self.REAL_RESPONSE)
+        fields = xmlutil.children_as_dict(next(xmlutil.find_all(root, "hdd")))
+        free_ratio = int(fields["freeSpace"]) / int(fields["capacity"])
+        self.assertLess(free_ratio, 0.05)
+        self.assertEqual(hikvision._classify(fields["status"], False)[0], StorageState.OK)
